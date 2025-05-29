@@ -1,0 +1,293 @@
+// This is the Prisma schema file for Fumy Limp laundry management system
+// It defines all entities, relationships, and enumerations
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enumerations
+
+enum UserRole {
+  ADMIN
+  REPARTIDOR
+}
+
+enum Zone {
+  NORTE
+  SUR
+  CENTRO
+  ESTE
+  OESTE
+  ADMINISTRACION // For admin users
+}
+
+enum ServiceStatus {
+  PENDING_PICKUP
+  PICKED_UP
+  LABELED
+  IN_PROCESS
+  PARTIAL_DELIVERY
+  COMPLETED
+  CANCELLED
+}
+
+enum ServicePriority {
+  ALTA
+  MEDIA
+  NORMAL
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum IncomeCategory {
+  SERVICIO_LAVANDERIA
+  PAGO_HOTEL
+  SERVICIO_PREMIUM
+  RECARGO_URGENTE
+  OTRO_INGRESO
+}
+
+enum ExpenseCategory {
+  SUMINISTROS_LAVANDERIA
+  COMBUSTIBLE_TRANSPORTE
+  MANTENIMIENTO_EQUIPOS
+  SALARIOS_PERSONAL
+  SERVICIOS_PUBLICOS
+  MARKETING_PUBLICIDAD
+  OTRO_GASTO
+}
+
+enum PaymentMethod {
+  EFECTIVO
+  TRANSFERENCIA_BANCARIA
+  YAPE
+  PLIN
+  TARJETA_CREDITO
+  TARJETA_DEBITO
+  OTRO
+}
+
+enum BagLabelStatus {
+  LABELED
+  PROCESSING
+  COMPLETED
+}
+
+enum BagLabelGeneratedAt {
+  LAVANDERIA
+  HOTEL
+}
+
+// Models
+
+model User {
+  id              String    @id @default(uuid())
+  name            String    @db.VarChar(100)
+  email           String    @unique
+  hashedPassword  String
+  role            UserRole
+  zone            Zone
+  phone           String?   @db.VarChar(20)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  servicesAssigned    Service[]      @relation("AssignedRepartidor")
+  servicesDelivered   Service[]      @relation("DeliveryRepartidor")
+  bagLabelsCreated    BagLabel[]     @relation("BagLabelCreator")
+  bagLabelsUpdated    BagLabel[]     @relation("BagLabelUpdater")
+  transactionsCreated Transaction[]  @relation("TransactionCreator")
+  auditLogs           AuditLog[]     @relation("AuditCreator")
+  revokedTokens       RevokedToken[]
+
+  @@index([email])
+  @@index([zone])
+}
+
+model Hotel {
+  id              String    @id @default(uuid())
+  name            String    @unique
+  address         String
+  zone            Zone
+  contactPerson   String
+  phone           String
+  email           String?
+  bagInventory    Int       @default(0)
+  pricePerKg      Decimal   @db.Decimal(10, 2)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  services        Service[]
+  bagLabels       BagLabel[]
+  transactions    Transaction[]
+
+  @@index([zone])
+}
+
+model Service {
+  id                      String          @id @default(uuid())
+  guestName               String          @db.VarChar(100)
+  roomNumber              String
+  hotelId                 String
+  bagCount                Int
+  weight                  Decimal?        @db.Decimal(10, 2)
+  observations            String?         @db.Text
+  specialInstructions     String?         @db.Text
+  priority                ServicePriority @default(NORMAL)
+  pickupDate              DateTime?
+  estimatedPickupDate     DateTime
+  labeledDate             DateTime?
+  deliveryDate            DateTime?
+  estimatedDeliveryDate   DateTime?
+  status                  ServiceStatus   @default(PENDING_PICKUP)
+  photos                  String[]        @db.Text
+  signature               String?         @db.Text
+  collectorName           String?
+  geolocation             Json?
+  repartidorId            String?
+  deliveryRepartidorId    String?
+  partialDeliveryPercentage Int?
+  price                   Decimal?        @db.Decimal(10, 2)
+  pickupTimeSlot          String?
+  customerNotes           String?         @db.Text
+  internalNotes           String?         @db.Text
+  labelingPhotos          String[]        @db.Text
+  deliveryPhotos          String[]        @db.Text
+  deliveredBagCount       Int?
+  remainingBags           Int?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+
+  // Relations
+  hotel                   Hotel           @relation(fields: [hotelId], references: [id])
+  repartidor              User?           @relation("AssignedRepartidor", fields: [repartidorId], references: [id])
+  deliveryRepartidor      User?           @relation("DeliveryRepartidor", fields: [deliveryRepartidorId], references: [id])
+  bagLabels               BagLabel[]
+  transactions            Transaction[]
+  auditLogs               AuditLog[]
+
+  @@index([hotelId])
+  @@index([repartidorId])
+  @@index([status])
+  @@index([priority])
+}
+
+model BagLabel {
+  id              String              @id @default(uuid())
+  serviceId       String
+  hotelId         String
+  label           String              @unique
+  bagNumber       Int
+  photo           String              @db.Text
+  registeredById  String
+  timestamp       DateTime            @default(now())
+  status          BagLabelStatus      @default(LABELED)
+  generatedAt     BagLabelGeneratedAt @default(LAVANDERIA)
+  observations    String?             @db.Text
+  labeledAt       DateTime?
+  updatedAt       DateTime?
+  updatedById     String?
+  createdAt       DateTime            @default(now())
+
+  // Relations
+  service         Service             @relation(fields: [serviceId], references: [id])
+  hotel           Hotel               @relation(fields: [hotelId], references: [id])
+  registeredBy    User                @relation("BagLabelCreator", fields: [registeredById], references: [id])
+  updatedBy       User?               @relation("BagLabelUpdater", fields: [updatedById], references: [id])
+  auditLogs       AuditLog[]
+
+  @@unique([serviceId, bagNumber])
+  @@index([serviceId])
+  @@index([hotelId])
+  @@index([label])
+}
+
+model Transaction {
+  id              String            @id @default(uuid())
+  type            TransactionType
+  amount          Decimal           @db.Decimal(10, 2)
+  incomeCategory  IncomeCategory?
+  expenseCategory ExpenseCategory?
+  description     String            @db.Text
+  date            DateTime
+  paymentMethod   PaymentMethod
+  hotelId         String?
+  serviceId       String?
+  notes           String?           @db.Text
+  registeredById  String
+  timestamp       DateTime          @default(now())
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  // Relations
+  hotel           Hotel?            @relation(fields: [hotelId], references: [id])
+  service         Service?          @relation(fields: [serviceId], references: [id])
+  registeredBy    User              @relation("TransactionCreator", fields: [registeredById], references: [id])
+  auditLogs       AuditLog[]
+
+  @@index([type])
+  @@index([date])
+  @@index([hotelId])
+  @@index([serviceId])
+}
+
+model AuditLog {
+  id              String    @id @default(uuid())
+  action          String
+  entity          String
+  entityId        String
+  details         String    @db.Text
+  userId          String
+  timestamp       DateTime  @default(now())
+
+  // Relations
+  user            User      @relation("AuditCreator", fields: [userId], references: [id])
+  service         Service?  @relation(fields: [serviceId], references: [id])
+  bagLabel        BagLabel? @relation(fields: [bagLabelId], references: [id])
+  transaction     Transaction? @relation(fields: [transactionId], references: [id])
+
+  // Optional relation fields
+  serviceId       String?
+  bagLabelId      String?
+  transactionId   String?
+
+  @@index([action])
+  @@index([entity])
+  @@index([entityId])
+  @@index([userId])
+  @@index([timestamp])
+}
+
+// Additional indexes and constraints
+
+model SystemConfig {
+  id              String    @id @default(uuid())
+  key             String    @unique
+  value           String
+  description     String?
+  updatedAt       DateTime  @updatedAt
+}
+
+model RevokedToken {
+  id              String    @id @default(uuid())
+  token           String    @unique
+  userId          String
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id])
+  
+  @@index([token])
+  @@index([userId])
+  @@index([expiresAt])
+}
