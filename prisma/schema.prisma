@@ -96,6 +96,7 @@ model User {
   role            UserRole
   zone            Zone
   phone           String?   @db.VarChar(20)
+  active          Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -110,6 +111,7 @@ model User {
 
   @@index([email])
   @@index([zone])
+  @@index([active])
 }
 
 model Hotel {
