@@ -16,6 +16,7 @@ const dashboardRoutes = require('./dashboard.routes');
 const guestRoutes = require('./guest.routes');
 const userRoutes = require('./user.routes');
 const auditRoutes = require('./audit.routes');
+const geocodeRoutes = require('./geocode.routes');
 
 // Mount routes
 router.use('/auth', authRoutes);
@@ -27,6 +28,7 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/guests', guestRoutes);
 router.use('/users', userRoutes);
 router.use('/audit', auditRoutes);
+router.use('/geocode', geocodeRoutes);
 
 // Export router
 module.exports = router;
