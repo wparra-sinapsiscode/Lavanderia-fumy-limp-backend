@@ -1,217 +1,26 @@
-/**
- * Service controller for Fumy Limp Backend
- */
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+const { AUDIT_ACTIONS } = require('../config/constants');
 
-const { prisma } = require('../config/database');
-const { AUDIT_ACTIONS, VALID_STATUS_TRANSITIONS, STATUS_REQUIREMENTS, VALIDATION_RULES } = require('../config/constants');
-const path = require('path');
-const fs = require('fs');
-
-/**
- * Get all services with optional filtering
- * @route GET /api/services
- * @access Private
- */
-exports.getAllServices = async (req, res) => {
-  try {
-    const { status, hotelId, zone, priority, limit = 100, offset = 0 } = req.query;
-    const where = {};
-    
-    // Apply filters
-    if (status) where.status = status;
-    if (hotelId) where.hotelId = hotelId;
-    if (priority) where.priority = priority;
-    
-    // Filter by zone if provided or if user is repartidor
-    if (zone) {
-      where.hotel = {
-        zone
-      };
-    } else if (req.user.role === 'REPARTIDOR') {
-      // Repartidores can only see services in their own zone
-      where.hotel = {
-        zone: req.user.zone
-      };
-      
-      // For repartidores, only show services assigned to them
-      where.OR = [
-        { repartidorId: req.user.id },
-        { deliveryRepartidorId: req.user.id }
-      ];
-    }
-    
-    const services = await prisma.service.findMany({
-      where,
-      include: {
-        hotel: {
-          select: {
-            id: true,
-            name: true,
-            zone: true,
-            pricePerKg: true
-          }
-        },
-        repartidor: {
-          select: {
-            id: true,
-            name: true,
-            zone: true
-          }
-        },
-        deliveryRepartidor: {
-          select: {
-            id: true,
-            name: true,
-            zone: true
-          }
-        },
-        bagLabels: {
-          select: {
-            id: true,
-            label: true,
-            bagNumber: true
-          }
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      },
-      skip: parseInt(offset),
-      take: parseInt(limit)
-    });
-    
-    // Get total count for pagination
-    const totalCount = await prisma.service.count({ where });
-    
-    return res.status(200).json({
-      success: true,
-      count: services.length,
-      total: totalCount,
-      data: services
-    });
-  } catch (error) {
-    console.error('Error getting services:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Error al obtener servicios',
-      error: error.message
-    });
-  }
-};
-
-/**
- * Get service by ID
- * @route GET /api/services/:id
- * @access Private
- */
-exports.getServiceById = async (req, res) => {
-  try {
-    const service = await prisma.service.findUnique({
-      where: {
-        id: req.params.id
-      },
-      include: {
-        hotel: {
-          select: {
-            id: true,
-            name: true,
-            zone: true,
-            pricePerKg: true
-          }
-        },
-        repartidor: {
-          select: {
-            id: true,
-            name: true,
-            zone: true
-          }
-        },
-        deliveryRepartidor: {
-          select: {
-            id: true,
-            name: true,
-            zone: true
-          }
-        },
-        bagLabels: {
-          select: {
-            id: true,
-            label: true,
-            bagNumber: true
-          }
-        },
-        photos: {
-          select: {
-            id: true,
-            url: true,
-            type: true
-          }
-        }
-      }
-    });
-    
-    if (!service) {
-      return res.status(404).json({
-        success: false,
-        message: 'Servicio no encontrado'
-      });
-    }
-    
-    // Check if repartidor has access to this service's zone
-    if (req.user.role === 'REPARTIDOR') {
-      // Check if service is in repartidor's zone
-      if (service.hotel.zone !== req.user.zone) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tiene permisos para acceder a este servicio'
-        });
-      }
-      
-      // Check if service is assigned to the repartidor
-      if (service.repartidorId !== req.user.id && service.deliveryRepartidorId !== req.user.id) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tiene permisos para acceder a este servicio'
-        });
-      }
-    }
-    
-    return res.status(200).json({
-      success: true,
-      data: service
-    });
-  } catch (error) {
-    console.error('Error getting service:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Error al obtener servicio',
-      error: error.message
-    });
-  }
-};
-
-/**
- * Create new service
- * @route POST /api/services
- * @access Private
- */
+// Create a new service
 exports.createService = async (req, res) => {
   try {
     const { 
       hotelId, 
-      repartidorId, 
       guestName, 
       guestRoom, 
+      bagCount, 
+      weight, 
       priority, 
+      repartidorId, 
       expectedDeliveryDate, 
-      specialInstructions 
+      specialInstructions,
+      observations
     } = req.body;
     
     // Check if hotel exists
     const hotel = await prisma.hotel.findUnique({
-      where: {
-        id: hotelId
-      }
+      where: { id: hotelId }
     });
     
     if (!hotel) {
@@ -246,27 +55,20 @@ exports.createService = async (req, res) => {
       }
     }
     
-    // Check zone permission for repartidor
-    if (req.user.role === 'REPARTIDOR') {
-      if (hotel.zone !== req.user.zone) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tiene permisos para crear servicios en esta zona'
-        });
-      }
-    }
-    
     // Create service
     const service = await prisma.service.create({
       data: {
         hotelId,
-        repartidorId: repartidorId || null,
         guestName,
-        guestRoom,
+        roomNumber: guestRoom,
+        repartidorId: repartidorId || null,
+        bagCount: parseInt(bagCount, 10) || 1,
+        weight: weight ? parseFloat(weight) : null,
         priority: priority || 'NORMAL',
         status: 'PENDING_PICKUP',
         expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
         specialInstructions,
+        observations,
         createdById: req.user.id
       }
     });
@@ -297,187 +99,278 @@ exports.createService = async (req, res) => {
   }
 };
 
-/**
- * Register pickup for a service
- * @route PUT /api/services/:id/pickup
- * @access Private
- */
-exports.registerPickup = async (req, res) => {
+// Create a hotel service without specific guest information
+exports.createHotelService = async (req, res) => {
   try {
     const { 
-      weight, 
-      signature, 
-      collectorName, 
-      bagCount, 
-      notes 
+      hotelId, 
+      roomNumber,
+      repartidorId, 
+      bagCount,
+      priority, 
+      expectedDeliveryDate,
+      specialInstructions,
+      observations,
+      isHotelService
     } = req.body;
     
-    // Validate required fields
-    if (!weight || !signature || !collectorName || !bagCount) {
-      return res.status(400).json({
+    // Check if hotel exists
+    const hotel = await prisma.hotel.findUnique({
+      where: { id: hotelId }
+    });
+    
+    if (!hotel) {
+      return res.status(404).json({
         success: false,
-        message: 'Se requieren los campos: peso, firma, nombre del recolector y cantidad de bolsas'
+        message: 'Hotel no encontrado'
       });
     }
     
-    // Validate weight
-    if (parseFloat(weight) < VALIDATION_RULES.service.minWeight) {
+    // Check if repartidor exists
+    if (!repartidorId) {
       return res.status(400).json({
         success: false,
-        message: `El peso mínimo debe ser ${VALIDATION_RULES.service.minWeight}kg`
+        message: 'Repartidor requerido para servicios de hotel'
       });
     }
     
-    // Check if service exists
-    const service = await prisma.service.findUnique({
+    const repartidor = await prisma.user.findUnique({
       where: {
-        id: req.params.id
-      },
-      include: {
-        hotel: {
-          select: {
-            id: true,
-            name: true,
-            zone: true,
-            pricePerKg: true
-          }
-        }
+        id: repartidorId,
+        role: 'REPARTIDOR'
       }
     });
     
-    if (!service) {
+    if (!repartidor) {
       return res.status(404).json({
         success: false,
-        message: 'Servicio no encontrado'
+        message: 'Repartidor no encontrado'
       });
     }
     
-    // Check if service is in the right status
-    if (service.status !== 'PENDING_PICKUP') {
+    // Check if repartidor zone matches hotel zone
+    if (repartidor.zone !== hotel.zone) {
       return res.status(400).json({
         success: false,
-        message: `No se puede registrar la recolección para un servicio en estado ${service.status}`
+        message: 'El repartidor debe estar asignado a la misma zona que el hotel'
       });
     }
     
-    // Check zone permission for repartidor
-    if (req.user.role === 'REPARTIDOR') {
-      if (service.hotel.zone !== req.user.zone) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tiene permisos para actualizar servicios en esta zona'
-        });
-      }
-      
-      // Check if service is assigned to the repartidor
-      if (service.repartidorId && service.repartidorId !== req.user.id) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tiene permisos para actualizar este servicio'
-        });
-      }
+    // Validar observaciones y número de habitación
+    if (!observations) {
+      return res.status(400).json({
+        success: false,
+        message: 'Las observaciones son requeridas para servicios de hotel'
+      });
     }
     
-    // Calculate estimated price
-    const estimatedPrice = parseFloat(weight) * service.hotel.pricePerKg;
+    if (!roomNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'El número de habitación es requerido para servicios de hotel'
+      });
+    }
     
-    // Update service with pickup info
-    const updatedService = await prisma.service.update({
-      where: {
-        id: req.params.id
-      },
+    // Use hotel's contact person as the guest name for hotel services
+    const guestName = hotel.contactPerson || 'Servicio de Hotel';
+    
+    // Create service
+    const service = await prisma.service.create({
       data: {
-        status: 'PICKED_UP',
-        weight: parseFloat(weight),
-        signature,
-        collectorName,
-        bagCount: parseInt(bagCount),
-        notes,
-        estimatedPrice,
-        pickupDate: new Date(),
-        repartidorId: service.repartidorId || req.user.id
+        hotelId,
+        guestName,
+        roomNumber,  // Ahora usamos el número de habitación proporcionado
+        repartidorId,
+        bagCount: parseInt(bagCount, 10) || 1,
+        priority: priority || 'NORMAL',
+        status: 'PENDING_PICKUP',
+        expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
+        specialInstructions,
+        observations,
+        createdById: req.user.id,
+        isHotelService: true  // Flag to indicate this is a hotel service without specific guest
       }
     });
     
     // Create audit log
     await prisma.auditLog.create({
       data: {
-        action: AUDIT_ACTIONS.SERVICE_STATUS_CHANGED,
+        action: AUDIT_ACTIONS.SERVICE_CREATED,
         entity: 'service',
         entityId: service.id,
-        details: `Servicio recolectado: ${service.hotel.name}, ${weight}kg, ${bagCount} bolsas, por ${collectorName}`,
+        details: `Servicio de hotel creado para ${hotel.name}, habitación ${roomNumber} (${bagCount} bolsas)`,
         userId: req.user.id
       }
     });
     
-    // Update hotel bag inventory if needed
-    if (bagCount > 0) {
-      await prisma.hotel.update({
-        where: {
-          id: service.hotel.id
-        },
-        data: {
-          bagInventory: {
-            decrement: parseInt(bagCount)
-          }
-        }
-      });
-      
-      // Create audit log for inventory update
-      await prisma.auditLog.create({
-        data: {
-          action: AUDIT_ACTIONS.HOTEL_INVENTORY_UPDATED,
-          entity: 'hotel',
-          entityId: service.hotel.id,
-          details: `Inventario reducido en ${bagCount} bolsas por servicio ID: ${service.id}`,
-          userId: req.user.id
-        }
-      });
-    }
-    
-    return res.status(200).json({
+    return res.status(201).json({
       success: true,
-      message: 'Servicio recolectado exitosamente',
-      data: updatedService
+      message: 'Servicio de hotel creado exitosamente',
+      data: service
     });
   } catch (error) {
-    console.error('Error registering pickup:', error);
+    console.error('Error creating hotel service:', error);
     return res.status(500).json({
       success: false,
-      message: 'Error al registrar recolección',
+      message: 'Error al crear servicio de hotel',
       error: error.message
     });
   }
 };
 
-/**
- * Change service status
- * @route PUT /api/services/:id/status
- * @access Private
- */
-exports.changeStatus = async (req, res) => {
+// Get all services
+exports.getAllServices = async (req, res) => {
   try {
-    const { status, internalNotes } = req.body;
+    // Extract filter parameters
+    const { 
+      status, 
+      hotelId, 
+      repartidorId, 
+      priority, 
+      zone,
+      isHotelService,
+      from, 
+      to,
+      page = 1, 
+      limit = 20 
+    } = req.query;
     
-    // Check if status is valid
-    if (!status) {
-      return res.status(400).json({
-        success: false,
-        message: 'Se requiere el nuevo estado del servicio'
-      });
+    // Build filter conditions
+    const where = {};
+    
+    if (status) {
+      where.status = status;
     }
     
-    // Check if service exists
+    if (hotelId) {
+      where.hotelId = hotelId;
+    }
+    
+    if (repartidorId) {
+      where.repartidorId = repartidorId;
+    }
+    
+    if (priority) {
+      where.priority = priority;
+    }
+    
+    if (isHotelService !== undefined) {
+      where.isHotelService = isHotelService === 'true';
+    }
+    
+    // Date range filter
+    if (from || to) {
+      where.createdAt = {};
+      
+      if (from) {
+        where.createdAt.gte = new Date(from);
+      }
+      
+      if (to) {
+        where.createdAt.lte = new Date(to);
+      }
+    }
+    
+    // Zone filter (requires join with hotel)
+    let hotelWhere = {};
+    if (zone) {
+      hotelWhere.zone = zone;
+    }
+    
+    // Parse pagination parameters
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+    
+    // Get services with pagination
+    const [services, total] = await Promise.all([
+      prisma.service.findMany({
+        where,
+        include: {
+          hotel: {
+            where: hotelWhere,
+            select: {
+              name: true,
+              zone: true
+            }
+          },
+          repartidor: {
+            select: {
+              name: true
+            }
+          },
+          createdBy: {
+            select: {
+              name: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip,
+        take: limitNum
+      }),
+      prisma.service.count({
+        where: {
+          ...where,
+          hotel: hotelWhere.zone ? { zone } : undefined
+        }
+      })
+    ]);
+    
+    // Filter out services whose hotel doesn't match zone filter
+    const filteredServices = zone 
+      ? services.filter(service => service.hotel)
+      : services;
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Servicios obtenidos exitosamente',
+      data: filteredServices,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      }
+    });
+  } catch (error) {
+    console.error('Error getting services:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al obtener servicios',
+      error: error.message
+    });
+  }
+};
+
+// Get service by ID
+exports.getServiceById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
     const service = await prisma.service.findUnique({
-      where: {
-        id: req.params.id
-      },
+      where: { id },
       include: {
         hotel: {
           select: {
+            name: true,
+            zone: true,
+            contactPerson: true,
+            contactPhone: true
+          }
+        },
+        repartidor: {
+          select: {
             id: true,
             name: true,
-            zone: true
+            phone: true
+          }
+        },
+        createdBy: {
+          select: {
+            name: true
           }
         },
         bagLabels: true
@@ -491,190 +384,69 @@ exports.changeStatus = async (req, res) => {
       });
     }
     
-    // Check if transition is valid
-    if (!VALID_STATUS_TRANSITIONS[service.status].includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `No se puede cambiar el estado de ${service.status} a ${status}`
-      });
-    }
-    
-    // Check zone permission for repartidor
-    if (req.user.role === 'REPARTIDOR') {
-      if (service.hotel.zone !== req.user.zone) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tiene permisos para actualizar servicios en esta zona'
-        });
-      }
-      
-      // Check if service is assigned to the repartidor
-      if (service.repartidorId !== req.user.id && service.deliveryRepartidorId !== req.user.id) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tiene permisos para actualizar este servicio'
-        });
-      }
-      
-      // Repartidores have limited status change permissions
-      const allowedStatusChanges = ['LABELED', 'IN_PROCESS', 'COMPLETED'];
-      if (!allowedStatusChanges.includes(status)) {
-        return res.status(403).json({
-          success: false,
-          message: `No tiene permisos para cambiar el estado a ${status}`
-        });
-      }
-    }
-    
-    // Check status requirements
-    const requirements = STATUS_REQUIREMENTS[status];
-    if (status === 'LABELED' && (!service.bagLabels || service.bagLabels.length === 0)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Se requiere al menos una etiqueta de bolsa para cambiar el estado a LABELED'
-      });
-    }
-    
-    if (status === 'CANCELLED' && !internalNotes) {
-      return res.status(400).json({
-        success: false,
-        message: 'Se requiere una nota interna para cancelar el servicio'
-      });
-    }
-    
-    // Prepare data for update
-    const updateData = {
-      status,
-      internalNotes: internalNotes || service.internalNotes
-    };
-    
-    // Add timestamps based on status
-    if (status === 'LABELED') {
-      updateData.labeledDate = new Date();
-    } else if (status === 'IN_PROCESS') {
-      updateData.processingDate = new Date();
-    } else if (status === 'COMPLETED') {
-      updateData.completedDate = new Date();
-    } else if (status === 'CANCELLED') {
-      updateData.cancelledDate = new Date();
-    }
-    
-    // Update service status
-    const updatedService = await prisma.service.update({
-      where: {
-        id: req.params.id
-      },
-      data: updateData
-    });
-    
-    // Create audit log
-    await prisma.auditLog.create({
-      data: {
-        action: status === 'CANCELLED' 
-          ? AUDIT_ACTIONS.SERVICE_CANCELLED 
-          : AUDIT_ACTIONS.SERVICE_STATUS_CHANGED,
-        entity: 'service',
-        entityId: service.id,
-        details: `Estado de servicio actualizado: ${service.status} → ${status}${internalNotes ? `, Nota: ${internalNotes}` : ''}`,
-        userId: req.user.id
-      }
-    });
-    
     return res.status(200).json({
       success: true,
-      message: `Estado actualizado a ${status} exitosamente`,
-      data: updatedService
+      message: 'Servicio obtenido exitosamente',
+      data: service
     });
   } catch (error) {
-    console.error('Error changing service status:', error);
+    console.error('Error getting service:', error);
     return res.status(500).json({
       success: false,
-      message: 'Error al cambiar estado del servicio',
+      message: 'Error al obtener servicio',
       error: error.message
     });
   }
 };
 
-/**
- * Register partial delivery for a service
- * @route PUT /api/services/:id/partial-delivery
- * @access Private
- */
-exports.registerPartialDelivery = async (req, res) => {
+// Update service
+exports.updateService = async (req, res) => {
   try {
+    const { id } = req.params;
     const { 
-      partialDeliveryPercentage, 
-      deliveredBagCount, 
-      signature, 
-      deliveryRepartidorId, 
-      receiverName, 
-      notes 
+      hotelId, 
+      guestName, 
+      roomNumber, 
+      bagCount, 
+      weight, 
+      priority, 
+      repartidorId, 
+      expectedDeliveryDate, 
+      specialInstructions,
+      observations
     } = req.body;
     
-    // Validate required fields
-    if (!partialDeliveryPercentage || !deliveredBagCount || !signature || !receiverName) {
-      return res.status(400).json({
-        success: false,
-        message: 'Se requieren los campos: porcentaje de entrega, cantidad de bolsas, firma y nombre del receptor'
-      });
-    }
-    
-    // Validate percentage
-    const percentage = parseInt(partialDeliveryPercentage);
-    if (percentage < VALIDATION_RULES.partialDelivery.minPercentage || 
-        percentage > VALIDATION_RULES.partialDelivery.maxPercentage) {
-      return res.status(400).json({
-        success: false,
-        message: `El porcentaje debe estar entre ${VALIDATION_RULES.partialDelivery.minPercentage} y ${VALIDATION_RULES.partialDelivery.maxPercentage}`
-      });
-    }
-    
     // Check if service exists
-    const service = await prisma.service.findUnique({
-      where: {
-        id: req.params.id
-      },
-      include: {
-        hotel: {
-          select: {
-            name: true,
-            zone: true
-          }
-        }
-      }
+    const existingService = await prisma.service.findUnique({
+      where: { id }
     });
     
-    if (!service) {
+    if (!existingService) {
       return res.status(404).json({
         success: false,
         message: 'Servicio no encontrado'
       });
     }
     
-    // Check if service is in the right status
-    if (service.status !== 'IN_PROCESS') {
-      return res.status(400).json({
-        success: false,
-        message: `No se puede registrar entrega parcial para un servicio en estado ${service.status}`
+    // Check if hotel exists (if provided)
+    if (hotelId) {
+      const hotel = await prisma.hotel.findUnique({
+        where: { id: hotelId }
       });
-    }
-    
-    // Check zone permission for repartidor
-    if (req.user.role === 'REPARTIDOR') {
-      if (service.hotel.zone !== req.user.zone) {
-        return res.status(403).json({
+      
+      if (!hotel) {
+        return res.status(404).json({
           success: false,
-          message: 'No tiene permisos para actualizar servicios en esta zona'
+          message: 'Hotel no encontrado'
         });
       }
     }
     
     // Check if repartidor exists (if provided)
-    let repartidor = null;
-    if (deliveryRepartidorId) {
-      repartidor = await prisma.user.findUnique({
+    if (repartidorId) {
+      const repartidor = await prisma.user.findUnique({
         where: {
-          id: deliveryRepartidorId,
+          id: repartidorId,
           role: 'REPARTIDOR'
         }
       });
@@ -682,276 +454,634 @@ exports.registerPartialDelivery = async (req, res) => {
       if (!repartidor) {
         return res.status(404).json({
           success: false,
-          message: 'Repartidor de entrega no encontrado'
+          message: 'Repartidor no encontrado'
         });
       }
       
       // Check if repartidor zone matches hotel zone
-      if (repartidor.zone !== service.hotel.zone) {
-        return res.status(400).json({
-          success: false,
-          message: 'El repartidor debe estar asignado a la misma zona que el hotel'
+      if (hotelId) {
+        const hotel = await prisma.hotel.findUnique({
+          where: { id: hotelId }
         });
-      }
-    }
-    
-    // Update service with partial delivery info
-    const updatedService = await prisma.service.update({
-      where: {
-        id: req.params.id
-      },
-      data: {
-        status: 'PARTIAL_DELIVERY',
-        partialDeliveryPercentage: percentage,
-        deliveredBagCount: parseInt(deliveredBagCount),
-        partialDeliverySignature: signature,
-        deliveryRepartidorId: deliveryRepartidorId || req.user.id,
-        receiverName,
-        partialDeliveryNotes: notes,
-        partialDeliveryDate: new Date()
-      }
-    });
-    
-    // Create audit log
-    await prisma.auditLog.create({
-      data: {
-        action: AUDIT_ACTIONS.SERVICE_STATUS_CHANGED,
-        entity: 'service',
-        entityId: service.id,
-        details: `Entrega parcial registrada: ${service.hotel.name}, ${percentage}%, ${deliveredBagCount} bolsas, recibido por ${receiverName}`,
-        userId: req.user.id
-      }
-    });
-    
-    return res.status(200).json({
-      success: true,
-      message: 'Entrega parcial registrada exitosamente',
-      data: updatedService
-    });
-  } catch (error) {
-    console.error('Error registering partial delivery:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Error al registrar entrega parcial',
-      error: error.message
-    });
-  }
-};
-
-/**
- * Upload service photos
- * @route POST /api/services/:id/photos
- * @access Private
- */
-exports.uploadPhotos = async (req, res) => {
-  try {
-    // Check if service exists
-    const service = await prisma.service.findUnique({
-      where: {
-        id: req.params.id
-      },
-      include: {
-        hotel: {
-          select: {
-            name: true,
-            zone: true
-          }
-        },
-        photos: true
-      }
-    });
-    
-    if (!service) {
-      return res.status(404).json({
-        success: false,
-        message: 'Servicio no encontrado'
-      });
-    }
-    
-    // Check zone permission for repartidor
-    if (req.user.role === 'REPARTIDOR') {
-      if (service.hotel.zone !== req.user.zone) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tiene permisos para actualizar servicios en esta zona'
-        });
-      }
-      
-      // Check if service is assigned to the repartidor
-      if (service.repartidorId !== req.user.id && service.deliveryRepartidorId !== req.user.id) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tiene permisos para actualizar este servicio'
-        });
-      }
-    }
-    
-    // Check if files were uploaded
-    if (!req.files || Object.keys(req.files).length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'No se han subido fotos'
-      });
-    }
-    
-    // Check max photos limit
-    if (service.photos.length + Object.keys(req.files).length > VALIDATION_RULES.service.maxPhotos) {
-      return res.status(400).json({
-        success: false,
-        message: `No se pueden subir más de ${VALIDATION_RULES.service.maxPhotos} fotos para un servicio`
-      });
-    }
-    
-    const { type = 'PICKUP' } = req.body;
-    const validTypes = ['PICKUP', 'PROCESS', 'DELIVERY', 'DAMAGED'];
-    
-    if (!validTypes.includes(type)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tipo de foto inválido'
-      });
-    }
-    
-    // Process and save each file
-    const uploadedPhotos = [];
-    const uploadDir = path.join(__dirname, '../../uploads/services', service.id);
-    
-    // Create directory if it doesn't exist
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    
-    // Get array of files (handle both single and multiple uploads)
-    const files = Array.isArray(req.files.photos) ? req.files.photos : [req.files.photos];
-    
-    for (const file of files) {
-      const timestamp = Date.now();
-      const filename = `${timestamp}_${file.name.replace(/\s+/g, '_')}`;
-      const filePath = path.join(uploadDir, filename);
-      
-      // Move file to upload directory
-      await file.mv(filePath);
-      
-      // Save to database
-      const photo = await prisma.servicePhoto.create({
-        data: {
-          serviceId: service.id,
-          url: `/uploads/services/${service.id}/${filename}`,
-          type
+        
+        if (repartidor.zone !== hotel.zone) {
+          return res.status(400).json({
+            success: false,
+            message: 'El repartidor debe estar asignado a la misma zona que el hotel'
+          });
         }
-      });
-      
-      uploadedPhotos.push(photo);
+      } else {
+        const hotel = await prisma.hotel.findUnique({
+          where: { id: existingService.hotelId }
+        });
+        
+        if (repartidor.zone !== hotel.zone) {
+          return res.status(400).json({
+            success: false,
+            message: 'El repartidor debe estar asignado a la misma zona que el hotel'
+          });
+        }
+      }
     }
+    
+    // Prepare update data
+    const updateData = {};
+    
+    if (hotelId) updateData.hotelId = hotelId;
+    if (guestName) updateData.guestName = guestName;
+    if (roomNumber) updateData.roomNumber = roomNumber;
+    if (bagCount) updateData.bagCount = parseInt(bagCount, 10);
+    if (weight !== undefined) updateData.weight = weight ? parseFloat(weight) : null;
+    if (priority) updateData.priority = priority;
+    if (repartidorId !== undefined) updateData.repartidorId = repartidorId || null;
+    if (expectedDeliveryDate) updateData.expectedDeliveryDate = new Date(expectedDeliveryDate);
+    if (specialInstructions !== undefined) updateData.specialInstructions = specialInstructions;
+    if (observations !== undefined) updateData.observations = observations;
+    
+    // Update service
+    const updatedService = await prisma.service.update({
+      where: { id },
+      data: updateData
+    });
     
     // Create audit log
     await prisma.auditLog.create({
       data: {
         action: AUDIT_ACTIONS.SERVICE_UPDATED,
         entity: 'service',
-        entityId: service.id,
-        details: `${uploadedPhotos.length} fotos tipo ${type} agregadas al servicio`,
+        entityId: id,
+        details: `Servicio actualizado: ${JSON.stringify(updateData)}`,
         userId: req.user.id
       }
     });
     
     return res.status(200).json({
       success: true,
-      message: `${uploadedPhotos.length} fotos subidas exitosamente`,
-      data: uploadedPhotos
+      message: 'Servicio actualizado exitosamente',
+      data: updatedService
     });
   } catch (error) {
-    console.error('Error uploading photos:', error);
+    console.error('Error updating service:', error);
     return res.status(500).json({
       success: false,
-      message: 'Error al subir fotos',
+      message: 'Error al actualizar servicio',
       error: error.message
     });
   }
 };
 
-/**
- * Get pending services
- * @route GET /api/services/pending
- * @access Private
- */
-exports.getPendingServices = async (req, res) => {
+// Update service status
+exports.updateServiceStatus = async (req, res) => {
   try {
-    const { zone, limit = 100, offset = 0 } = req.query;
-    const where = {
-      status: {
-        in: ['PENDING_PICKUP', 'PICKED_UP', 'LABELED', 'IN_PROCESS']
-      }
-    };
+    const { id } = req.params;
+    const { status, notes } = req.body;
     
-    // Filter by zone if provided or if user is repartidor
-    if (zone) {
-      where.hotel = {
-        zone
-      };
-    } else if (req.user.role === 'REPARTIDOR') {
-      // Repartidores can only see services in their own zone
-      where.hotel = {
-        zone: req.user.zone
-      };
-      
-      // For repartidores, only show services assigned to them
-      where.OR = [
-        { repartidorId: req.user.id },
-        { deliveryRepartidorId: req.user.id }
-      ];
+    // Check if service exists
+    const existingService = await prisma.service.findUnique({
+      where: { id }
+    });
+    
+    if (!existingService) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio no encontrado'
+      });
     }
     
-    const pendingServices = await prisma.service.findMany({
+    // Validate status transition
+    const validStatuses = [
+      'PENDING_PICKUP',
+      'PICKED_UP',
+      'LABELED',
+      'IN_PROCESS',
+      'READY_FOR_DELIVERY',
+      'PARTIAL_DELIVERY',
+      'COMPLETED',
+      'CANCELLED'
+    ];
+    
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Estado no válido'
+      });
+    }
+    
+    // Prepare status specific data
+    const updateData = {
+      status,
+      statusNotes: notes
+    };
+    
+    // Add timestamps based on status
+    switch (status) {
+      case 'PICKED_UP':
+        updateData.pickupDate = new Date();
+        break;
+      case 'LABELED':
+        updateData.labelDate = new Date();
+        break;
+      case 'IN_PROCESS':
+        updateData.processDate = new Date();
+        break;
+      case 'READY_FOR_DELIVERY':
+        updateData.readyDate = new Date();
+        break;
+      case 'PARTIAL_DELIVERY':
+        updateData.partialDeliveryDate = new Date();
+        break;
+      case 'COMPLETED':
+        updateData.completionDate = new Date();
+        break;
+      case 'CANCELLED':
+        updateData.cancellationDate = new Date();
+        break;
+    }
+    
+    // Update service
+    const updatedService = await prisma.service.update({
+      where: { id },
+      data: updateData
+    });
+    
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        action: AUDIT_ACTIONS.SERVICE_STATUS_UPDATED,
+        entity: 'service',
+        entityId: id,
+        details: `Estado actualizado a ${status}${notes ? `: ${notes}` : ''}`,
+        userId: req.user.id
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Estado de servicio actualizado exitosamente',
+      data: updatedService
+    });
+  } catch (error) {
+    console.error('Error updating service status:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al actualizar estado de servicio',
+      error: error.message
+    });
+  }
+};
+
+// Assign repartidor to service
+exports.assignRepartidor = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { repartidorId } = req.body;
+    
+    // Check if service exists
+    const existingService = await prisma.service.findUnique({
+      where: { id },
+      include: {
+        hotel: true
+      }
+    });
+    
+    if (!existingService) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio no encontrado'
+      });
+    }
+    
+    // Check if repartidor exists
+    const repartidor = await prisma.user.findUnique({
+      where: {
+        id: repartidorId,
+        role: 'REPARTIDOR'
+      }
+    });
+    
+    if (!repartidor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Repartidor no encontrado'
+      });
+    }
+    
+    // Check if repartidor zone matches hotel zone
+    if (repartidor.zone !== existingService.hotel.zone) {
+      return res.status(400).json({
+        success: false,
+        message: 'El repartidor debe estar asignado a la misma zona que el hotel'
+      });
+    }
+    
+    // Update service
+    const updatedService = await prisma.service.update({
+      where: { id },
+      data: {
+        repartidorId
+      }
+    });
+    
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        action: AUDIT_ACTIONS.SERVICE_REPARTIDOR_ASSIGNED,
+        entity: 'service',
+        entityId: id,
+        details: `Repartidor asignado: ${repartidor.name}`,
+        userId: req.user.id
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Repartidor asignado exitosamente',
+      data: updatedService
+    });
+  } catch (error) {
+    console.error('Error assigning repartidor:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al asignar repartidor',
+      error: error.message
+    });
+  }
+};
+
+// Delete service
+exports.deleteService = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if service exists
+    const existingService = await prisma.service.findUnique({
+      where: { id }
+    });
+    
+    if (!existingService) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio no encontrado'
+      });
+    }
+    
+    // Can only delete services that are in PENDING_PICKUP status
+    if (existingService.status !== 'PENDING_PICKUP') {
+      return res.status(400).json({
+        success: false,
+        message: 'Solo se pueden eliminar servicios en estado pendiente de recogida'
+      });
+    }
+    
+    // Delete service
+    await prisma.service.delete({
+      where: { id }
+    });
+    
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        action: AUDIT_ACTIONS.SERVICE_DELETED,
+        entity: 'service',
+        entityId: id,
+        details: `Servicio eliminado: ${existingService.guestName}, ${existingService.roomNumber}`,
+        userId: req.user.id
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Servicio eliminado exitosamente'
+    });
+  } catch (error) {
+    console.error('Error deleting service:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al eliminar servicio',
+      error: error.message
+    });
+  }
+};
+
+// Get services by hotel
+exports.getServicesByHotel = async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const { status, page = 1, limit = 20 } = req.query;
+    
+    // Check if hotel exists
+    const hotel = await prisma.hotel.findUnique({
+      where: { id: hotelId }
+    });
+    
+    if (!hotel) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hotel no encontrado'
+      });
+    }
+    
+    // Build filter conditions
+    const where = {
+      hotelId
+    };
+    
+    if (status) {
+      where.status = status;
+    }
+    
+    // Parse pagination parameters
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+    
+    // Get services with pagination
+    const [services, total] = await Promise.all([
+      prisma.service.findMany({
+        where,
+        include: {
+          hotel: {
+            select: {
+              name: true,
+              zone: true
+            }
+          },
+          repartidor: {
+            select: {
+              name: true
+            }
+          },
+          createdBy: {
+            select: {
+              name: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip,
+        take: limitNum
+      }),
+      prisma.service.count({ where })
+    ]);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Servicios del hotel obtenidos exitosamente',
+      data: services,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      }
+    });
+  } catch (error) {
+    console.error('Error getting hotel services:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al obtener servicios del hotel',
+      error: error.message
+    });
+  }
+};
+
+// Get services by repartidor
+exports.getServicesByRepartidor = async (req, res) => {
+  try {
+    const { repartidorId } = req.params;
+    const { status, page = 1, limit = 20 } = req.query;
+    
+    // Check if repartidor exists
+    const repartidor = await prisma.user.findUnique({
+      where: {
+        id: repartidorId,
+        role: 'REPARTIDOR'
+      }
+    });
+    
+    if (!repartidor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Repartidor no encontrado'
+      });
+    }
+    
+    // Build filter conditions
+    const where = {
+      repartidorId
+    };
+    
+    if (status) {
+      where.status = status;
+    }
+    
+    // Parse pagination parameters
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+    
+    // Get services with pagination
+    const [services, total] = await Promise.all([
+      prisma.service.findMany({
+        where,
+        include: {
+          hotel: {
+            select: {
+              name: true,
+              zone: true
+            }
+          },
+          repartidor: {
+            select: {
+              name: true
+            }
+          },
+          createdBy: {
+            select: {
+              name: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip,
+        take: limitNum
+      }),
+      prisma.service.count({ where })
+    ]);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Servicios del repartidor obtenidos exitosamente',
+      data: services,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      }
+    });
+  } catch (error) {
+    console.error('Error getting repartidor services:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al obtener servicios del repartidor',
+      error: error.message
+    });
+  }
+};
+
+// Get services assigned to current user
+exports.getMyServices = async (req, res) => {
+  try {
+    const { id, role } = req.user;
+    const { status, page = 1, limit = 20 } = req.query;
+    
+    // Build filter conditions
+    let where = {};
+    
+    if (role === 'REPARTIDOR') {
+      where.repartidorId = id;
+    } else if (role === 'HOTEL') {
+      // Get hotel ID for hotel user
+      const hotel = await prisma.hotel.findFirst({
+        where: {
+          users: {
+            some: {
+              userId: id
+            }
+          }
+        }
+      });
+      
+      if (!hotel) {
+        return res.status(404).json({
+          success: false,
+          message: 'Hotel no encontrado para este usuario'
+        });
+      }
+      
+      where.hotelId = hotel.id;
+    } else if (role !== 'ADMIN') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para ver servicios'
+      });
+    }
+    
+    if (status) {
+      where.status = status;
+    }
+    
+    // Parse pagination parameters
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+    
+    // Get services with pagination
+    const [services, total] = await Promise.all([
+      prisma.service.findMany({
+        where,
+        include: {
+          hotel: {
+            select: {
+              name: true,
+              zone: true
+            }
+          },
+          repartidor: {
+            select: {
+              name: true
+            }
+          },
+          createdBy: {
+            select: {
+              name: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip,
+        take: limitNum
+      }),
+      prisma.service.count({ where })
+    ]);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Mis servicios obtenidos exitosamente',
+      data: services,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      }
+    });
+  } catch (error) {
+    console.error('Error getting my services:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al obtener mis servicios',
+      error: error.message
+    });
+  }
+};
+
+// Get pending services (for repartidores to pick up)
+exports.getPendingServices = async (req, res) => {
+  try {
+    const { zone } = req.query;
+    
+    // Build filter conditions
+    const where = {
+      status: 'PENDING_PICKUP',
+      repartidorId: null // Only services not yet assigned to a repartidor
+    };
+    
+    // Zone filtering (requires join with hotel)
+    let hotelWhere = {};
+    if (zone) {
+      hotelWhere.zone = zone;
+    }
+    
+    // Get pending services
+    const services = await prisma.service.findMany({
       where,
       include: {
         hotel: {
+          where: hotelWhere,
           select: {
-            id: true,
             name: true,
-            zone: true
-          }
-        },
-        repartidor: {
-          select: {
-            id: true,
-            name: true
+            zone: true,
+            address: true
           }
         }
       },
       orderBy: [
         {
-          priority: 'desc'
+          priority: 'asc' // ALTA comes before NORMAL
         },
         {
-          createdAt: 'asc'
+          createdAt: 'asc' // Oldest first
         }
-      ],
-      skip: parseInt(offset),
-      take: parseInt(limit)
+      ]
     });
     
-    // Get total count for pagination
-    const totalCount = await prisma.service.count({ where });
-    
-    // Group by status for dashboard stats
-    const statusCounts = {
-      PENDING_PICKUP: 0,
-      PICKED_UP: 0,
-      LABELED: 0,
-      IN_PROCESS: 0
-    };
-    
-    pendingServices.forEach(service => {
-      statusCounts[service.status]++;
-    });
+    // Filter out services whose hotel doesn't match zone filter
+    const filteredServices = zone 
+      ? services.filter(service => service.hotel)
+      : services;
     
     return res.status(200).json({
       success: true,
-      count: pendingServices.length,
-      total: totalCount,
-      statusCounts,
-      data: pendingServices
+      message: 'Servicios pendientes obtenidos exitosamente',
+      data: filteredServices
     });
   } catch (error) {
     console.error('Error getting pending services:', error);
@@ -963,4 +1093,197 @@ exports.getPendingServices = async (req, res) => {
   }
 };
 
-module.exports = exports;
+// Get service statistics
+exports.getServiceStats = async (req, res) => {
+  try {
+    const { from, to, zone } = req.query;
+    
+    // Prepare date range
+    const dateFilter = {};
+    if (from) {
+      dateFilter.gte = new Date(from);
+    }
+    if (to) {
+      dateFilter.lte = new Date(to);
+    }
+    
+    // Prepare hotel filter for zone
+    let hotelWhere = {};
+    if (zone) {
+      hotelWhere.zone = zone;
+    }
+    
+    // Basic where clause
+    const whereClause = {};
+    if (from || to) {
+      whereClause.createdAt = dateFilter;
+    }
+    
+    // Total services count
+    const totalServices = await prisma.service.count({
+      where: whereClause
+    });
+    
+    // Services by status
+    const servicesByStatus = await prisma.service.groupBy({
+      by: ['status'],
+      where: whereClause,
+      _count: true
+    });
+    
+    // Format status counts
+    const statusCounts = {};
+    servicesByStatus.forEach(item => {
+      statusCounts[item.status] = item._count;
+    });
+    
+    // Services by priority
+    const servicesByPriority = await prisma.service.groupBy({
+      by: ['priority'],
+      where: whereClause,
+      _count: true
+    });
+    
+    // Format priority counts
+    const priorityCounts = {};
+    servicesByPriority.forEach(item => {
+      priorityCounts[item.priority] = item._count;
+    });
+    
+    // Top hotels by service count
+    const topHotels = await prisma.service.groupBy({
+      by: ['hotelId'],
+      where: whereClause,
+      _count: true,
+      orderBy: {
+        _count: {
+          _all: 'desc'
+        }
+      },
+      take: 5
+    });
+    
+    // Get hotel names for top hotels
+    const hotelIds = topHotels.map(item => item.hotelId);
+    const hotels = await prisma.hotel.findMany({
+      where: {
+        id: {
+          in: hotelIds
+        }
+      },
+      select: {
+        id: true,
+        name: true
+      }
+    });
+    
+    // Format top hotels with names
+    const formattedTopHotels = topHotels.map(item => {
+      const hotel = hotels.find(h => h.id === item.hotelId);
+      return {
+        hotelId: item.hotelId,
+        hotelName: hotel ? hotel.name : 'Unknown',
+        count: item._count
+      };
+    });
+    
+    // Top repartidores by service count
+    const topRepartidores = await prisma.service.groupBy({
+      by: ['repartidorId'],
+      where: {
+        ...whereClause,
+        repartidorId: {
+          not: null
+        }
+      },
+      _count: true,
+      orderBy: {
+        _count: {
+          _all: 'desc'
+        }
+      },
+      take: 5
+    });
+    
+    // Get repartidor names for top repartidores
+    const repartidorIds = topRepartidores.map(item => item.repartidorId).filter(Boolean);
+    const repartidores = await prisma.user.findMany({
+      where: {
+        id: {
+          in: repartidorIds
+        }
+      },
+      select: {
+        id: true,
+        name: true
+      }
+    });
+    
+    // Format top repartidores with names
+    const formattedTopRepartidores = topRepartidores.map(item => {
+      const repartidor = repartidores.find(r => r.id === item.repartidorId);
+      return {
+        repartidorId: item.repartidorId,
+        repartidorName: repartidor ? repartidor.name : 'Unknown',
+        count: item._count
+      };
+    });
+    
+    // Average processing time (createdAt to completionDate)
+    const completedServices = await prisma.service.findMany({
+      where: {
+        ...whereClause,
+        status: 'COMPLETED',
+        completionDate: {
+          not: null
+        }
+      },
+      select: {
+        createdAt: true,
+        completionDate: true
+      }
+    });
+    
+    let avgProcessingTime = 0;
+    if (completedServices.length > 0) {
+      const totalTime = completedServices.reduce((sum, service) => {
+        const processTime = service.completionDate.getTime() - service.createdAt.getTime();
+        return sum + processTime;
+      }, 0);
+      
+      avgProcessingTime = totalTime / completedServices.length / (1000 * 60 * 60); // in hours
+    }
+    
+    // Total bag count
+    const bagCountResult = await prisma.service.aggregate({
+      where: whereClause,
+      _sum: {
+        bagCount: true
+      }
+    });
+    
+    const totalBags = bagCountResult._sum.bagCount || 0;
+    
+    // Return all stats
+    return res.status(200).json({
+      success: true,
+      message: 'Estadísticas de servicios obtenidas exitosamente',
+      data: {
+        totalServices,
+        statusCounts,
+        priorityCounts,
+        topHotels: formattedTopHotels,
+        topRepartidores: formattedTopRepartidores,
+        avgProcessingTime,
+        totalBags
+      }
+    });
+  } catch (error) {
+    console.error('Error getting service statistics:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al obtener estadísticas de servicios',
+      error: error.message
+    });
+  }
+};

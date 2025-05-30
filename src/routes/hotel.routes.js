@@ -5,10 +5,10 @@
 const express = require('express');
 const router = express.Router();
 const hotelController = require('../controllers/hotel.controller');
-const { authenticate, isAdmin } = require('../middleware/auth.middleware');
+const { verifyToken, isAdmin } = require('../middleware/auth.middleware');
 
 // Apply authentication middleware to all routes
-router.use(authenticate);
+router.use(verifyToken);
 
 // Get all hotels (with optional zone filtering)
 router.get('/', hotelController.getAllHotels);

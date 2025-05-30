@@ -7,10 +7,10 @@ const router = express.Router();
 const { prisma } = require('../config/database');
 const dashboardController = require('../controllers/dashboard.controller');
 const auditController = require('../controllers/audit.controller');
-const { authenticate, isAdmin, isRepartidor } = require('../middleware/auth.middleware');
+const { verifyToken, isAdmin, isRepartidor } = require('../middleware/auth.middleware');
 
 // Apply authentication middleware to all routes
-router.use(authenticate);
+router.use(verifyToken);
 
 // GET /dashboard/summary - Dashboard summary metrics (admin or repartidor)
 router.get('/summary', (req, res) => {
@@ -21,13 +21,13 @@ router.get('/summary', (req, res) => {
   }
 });
 
-// GET /dashboard/services-stats - Services by status (accessible to all authenticated users)
+// GET /dashboard/services-stats - Services by status (accessible to all verifyTokend users)
 router.get('/services-stats', dashboardController.getServicesByStatus);
 
 // GET /dashboard/financial-stats - Financial metrics (admin only)
 router.get('/financial-stats', isAdmin, dashboardController.getFinancialMetrics);
 
-// GET /dashboard/hotel-stats - Hotel statistics (accessible to authenticated users)
+// GET /dashboard/hotel-stats - Hotel statistics (accessible to verifyTokend users)
 router.get('/hotel-stats', async (req, res) => {
   try {
     // For admin users, we extract hotel stats from admin metrics

@@ -5,10 +5,10 @@
 const express = require('express');
 const router = express.Router();
 const auditController = require('../controllers/audit.controller');
-const { authenticate, isAdmin } = require('../middleware/auth.middleware');
+const { verifyToken, isAdmin } = require('../middleware/auth.middleware');
 
 // Apply authentication and admin middleware to all routes
-router.use(authenticate);
+router.use(verifyToken);
 router.use(isAdmin);
 
 // Get audit logs with filtering

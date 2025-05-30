@@ -5,10 +5,10 @@
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/user.controller');
-const { authenticate, isAdmin } = require('../middleware/auth.middleware');
+const { verifyToken, isAdmin } = require('../middleware/auth.middleware');
 
 // Apply authentication middleware to all routes
-router.use(authenticate);
+router.use(verifyToken);
 
 // Special routes
 router.get('/repartidores', userController.getRepartidores);

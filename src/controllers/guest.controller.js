@@ -75,7 +75,7 @@ exports.registerGuest = async (req, res) => {
       },
       orderBy: {
         // Get repartidor with least assigned active services
-        services: {
+        servicesAssigned: {
           _count: 'asc'
         }
       }

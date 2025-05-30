@@ -1,42 +1,105 @@
-/**
- * Service routes for Fumy Limp Backend
- */
-
 const express = require('express');
 const router = express.Router();
 const serviceController = require('../controllers/service.controller');
-const bagLabelController = require('../controllers/bagLabel.controller');
-const { authenticate, isAdmin } = require('../middleware/auth.middleware');
+const authMiddleware = require('../middleware/auth.middleware');
 
-// Apply authentication middleware to all routes
-router.use(authenticate);
+// Create a new service
+router.post(
+  '/',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN', 'RECEPCION']),
+  serviceController.createService
+);
 
-// Get pending services (dashboard) - this must be before /:id routes to avoid conflict
-router.get('/pending', serviceController.getPendingServices);
+// Create a hotel service (without specific guest)
+router.post(
+  '/hotel',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN', 'RECEPCION']),
+  serviceController.createHotelService
+);
 
-// Get all services with optional filtering
-router.get('/', serviceController.getAllServices);
+// Get all services (with filtering)
+router.get(
+  '/',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN', 'RECEPCION']),
+  serviceController.getAllServices
+);
 
 // Get service by ID
-router.get('/:id', serviceController.getServiceById);
+router.get(
+  '/:id',
+  authMiddleware.verifyToken,
+  serviceController.getServiceById
+);
 
-// Create new service
-router.post('/', serviceController.createService);
+// Update service
+router.put(
+  '/:id',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN', 'RECEPCION']),
+  serviceController.updateService
+);
 
-// Register pickup for a service
-router.put('/:id/pickup', serviceController.registerPickup);
+// Update service status
+router.put(
+  '/:id/status',
+  authMiddleware.verifyToken,
+  serviceController.updateServiceStatus
+);
 
-// Change service status
-router.put('/:id/status', serviceController.changeStatus);
+// Assign repartidor to service
+router.patch(
+  '/:id/assign',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN', 'RECEPCION']),
+  serviceController.assignRepartidor
+);
 
-// Register partial delivery for a service
-router.put('/:id/partial-delivery', serviceController.registerPartialDelivery);
+// Delete service
+router.delete(
+  '/:id',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN']),
+  serviceController.deleteService
+);
 
-// Upload service photos
-router.post('/:id/photos', serviceController.uploadPhotos);
+// Get services by hotel
+router.get(
+  '/hotel/:hotelId',
+  authMiddleware.verifyToken,
+  serviceController.getServicesByHotel
+);
 
-// Bag Label routes for services
-router.post('/:serviceId/labels', bagLabelController.createLabels);
-router.get('/:serviceId/labels', bagLabelController.getServiceLabels);
+// Get services by repartidor
+router.get(
+  '/repartidor/:repartidorId',
+  authMiddleware.verifyToken,
+  serviceController.getServicesByRepartidor
+);
+
+// Get services assigned to current user
+router.get(
+  '/my-services',
+  authMiddleware.verifyToken,
+  serviceController.getMyServices
+);
+
+// Get pending services for repartidores to pick up
+router.get(
+  '/pending',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN', 'RECEPCION', 'REPARTIDOR']),
+  serviceController.getPendingServices
+);
+
+// Get service statistics
+router.get(
+  '/stats',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN']),
+  serviceController.getServiceStats
+);
 
 module.exports = router;

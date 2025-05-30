@@ -9,7 +9,7 @@ const { PERMISSIONS } = require('../config/constants');
 /**
  * Middleware to validate JWT token and attach user to request
  */
-exports.authenticate = async (req, res, next) => {
+exports.verifyToken = async (req, res, next) => {
   try {
     // Get token from header
     const authHeader = req.headers.authorization;
@@ -67,6 +67,21 @@ exports.authenticate = async (req, res, next) => {
       message: 'Token inválido.' 
     });
   }
+};
+
+/**
+ * Middleware to check if user has one of the specified roles
+ */
+exports.hasRole = (roles) => {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: `Acceso denegado. Se requiere uno de los roles: ${roles.join(', ')}.` 
+      });
+    }
+    next();
+  };
 };
 
 /**
