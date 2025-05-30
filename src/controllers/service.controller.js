@@ -68,8 +68,7 @@ exports.createService = async (req, res) => {
         status: 'PENDING_PICKUP',
         expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
         specialInstructions,
-        observations,
-        createdById: req.user.id
+        observations
       }
     });
     
@@ -187,7 +186,6 @@ exports.createHotelService = async (req, res) => {
         expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
         specialInstructions,
         observations,
-        createdById: req.user.id,
         isHotelService: true  // Flag to indicate this is a hotel service without specific guest
       }
     });
@@ -285,21 +283,18 @@ exports.getAllServices = async (req, res) => {
     // Get services with pagination
     const [services, total] = await Promise.all([
       prisma.service.findMany({
-        where,
+        where: {
+          ...where,
+          hotel: hotelWhere.zone ? { zone: { equals: hotelWhere.zone } } : undefined
+        },
         include: {
           hotel: {
-            where: hotelWhere,
             select: {
               name: true,
               zone: true
             }
           },
           repartidor: {
-            select: {
-              name: true
-            }
-          },
-          createdBy: {
             select: {
               name: true
             }
@@ -314,15 +309,13 @@ exports.getAllServices = async (req, res) => {
       prisma.service.count({
         where: {
           ...where,
-          hotel: hotelWhere.zone ? { zone } : undefined
+          hotel: hotelWhere.zone ? { zone: { equals: hotelWhere.zone } } : undefined
         }
       })
     ]);
     
-    // Filter out services whose hotel doesn't match zone filter
-    const filteredServices = zone 
-      ? services.filter(service => service.hotel)
-      : services;
+    // Ya no necesitamos filtrar manualmente porque Prisma lo hace por nosotros
+    const filteredServices = services;
     
     return res.status(200).json({
       success: true,
@@ -366,11 +359,6 @@ exports.getServiceById = async (req, res) => {
             id: true,
             name: true,
             phone: true
-          }
-        },
-        createdBy: {
-          select: {
-            name: true
           }
         },
         bagLabels: true
@@ -810,11 +798,6 @@ exports.getServicesByHotel = async (req, res) => {
             select: {
               name: true
             }
-          },
-          createdBy: {
-            select: {
-              name: true
-            }
           }
         },
         orderBy: {
@@ -894,11 +877,6 @@ exports.getServicesByRepartidor = async (req, res) => {
             }
           },
           repartidor: {
-            select: {
-              name: true
-            }
-          },
-          createdBy: {
             select: {
               name: true
             }
@@ -996,11 +974,6 @@ exports.getMyServices = async (req, res) => {
             select: {
               name: true
             }
-          },
-          createdBy: {
-            select: {
-              name: true
-            }
           }
         },
         orderBy: {
@@ -1052,10 +1025,12 @@ exports.getPendingServices = async (req, res) => {
     
     // Get pending services
     const services = await prisma.service.findMany({
-      where,
+      where: {
+        ...where,
+        hotel: hotelWhere.zone ? { zone: { equals: hotelWhere.zone } } : undefined
+      },
       include: {
         hotel: {
-          where: hotelWhere,
           select: {
             name: true,
             zone: true,
@@ -1073,10 +1048,8 @@ exports.getPendingServices = async (req, res) => {
       ]
     });
     
-    // Filter out services whose hotel doesn't match zone filter
-    const filteredServices = zone 
-      ? services.filter(service => service.hotel)
-      : services;
+    // Ya no necesitamos filtrar manualmente
+    const filteredServices = services;
     
     return res.status(200).json({
       success: true,
