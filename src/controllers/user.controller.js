@@ -285,7 +285,7 @@ exports.updateUser = async (req, res) => {
 };
 
 /**
- * Delete user (soft delete)
+ * Delete user (hard delete if no relations, soft delete if has completed services)
  * @route DELETE /api/users/:id
  * @access Admin only
  */
@@ -305,8 +305,8 @@ exports.deleteUser = async (req, res) => {
       });
     }
     
-    // Check if user has assigned services
-    const assignedServices = await prisma.service.count({
+    // Check if user has assigned ACTIVE services
+    const assignedActiveServices = await prisma.service.count({
       where: {
         OR: [
           { repartidorId: userId },
@@ -318,38 +318,71 @@ exports.deleteUser = async (req, res) => {
       }
     });
     
-    if (assignedServices > 0) {
+    if (assignedActiveServices > 0) {
       return res.status(400).json({
         success: false,
-        message: `No se puede eliminar el usuario porque tiene ${assignedServices} servicios activos asignados`
+        message: `No se puede eliminar el usuario porque tiene ${assignedActiveServices} servicios activos asignados`
       });
     }
     
-    // Soft delete by setting active to false
-    const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: { active: false }
-    });
+    // Check if user has ANY relations (including completed services)
+    const hasRelations = await checkUserRelations(userId);
     
-    // Create audit log
-    await prisma.auditLog.create({
-      data: {
-        action: AUDIT_ACTIONS.USER_DELETED,
-        entity: 'user',
-        entityId: userId,
-        details: `Usuario eliminado (soft delete): ${user.name} (${user.email})`,
-        userId: req.user.id
-      }
-    });
+    let result;
     
-    return res.status(200).json({
-      success: true,
-      message: 'Usuario eliminado exitosamente',
-      data: {
-        id: updatedUser.id,
-        active: updatedUser.active
-      }
-    });
+    if (hasRelations) {
+      // Soft delete if user has any relations
+      result = await prisma.user.update({
+        where: { id: userId },
+        data: { active: false }
+      });
+      
+      // Create audit log for soft delete
+      await prisma.auditLog.create({
+        data: {
+          action: AUDIT_ACTIONS.USER_DELETED,
+          entity: 'user',
+          entityId: userId,
+          details: `Usuario desactivado (soft delete): ${user.name} (${user.email})`,
+          userId: req.user.id
+        }
+      });
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Usuario desactivado exitosamente',
+        deleteType: 'soft',
+        data: {
+          id: result.id,
+          active: result.active
+        }
+      });
+    } else {
+      // Hard delete if user has no relations
+      result = await prisma.user.delete({
+        where: { id: userId }
+      });
+      
+      // Create audit log for hard delete
+      await prisma.auditLog.create({
+        data: {
+          action: AUDIT_ACTIONS.USER_DELETED,
+          entity: 'user',
+          entityId: userId,
+          details: `Usuario eliminado permanentemente: ${user.name} (${user.email})`,
+          userId: req.user.id
+        }
+      });
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Usuario eliminado permanentemente',
+        deleteType: 'hard',
+        data: {
+          id: userId
+        }
+      });
+    }
   } catch (error) {
     console.error('Error deleting user:', error);
     return res.status(500).json({
@@ -359,6 +392,49 @@ exports.deleteUser = async (req, res) => {
     });
   }
 };
+
+/**
+ * Helper function to check if a user has any relations
+ * @param {string} userId - User ID
+ * @returns {Promise<boolean>} True if user has relations, false otherwise
+ */
+async function checkUserRelations(userId) {
+  // Check for services (even completed ones)
+  const servicesCount = await prisma.service.count({
+    where: {
+      OR: [
+        { repartidorId: userId },
+        { deliveryRepartidorId: userId }
+      ]
+    }
+  });
+  
+  if (servicesCount > 0) return true;
+  
+  // Check for bag labels created
+  const bagLabelsCreatedCount = await prisma.bagLabel.count({
+    where: { registeredById: userId }
+  });
+  
+  if (bagLabelsCreatedCount > 0) return true;
+  
+  // Check for bag labels updated
+  const bagLabelsUpdatedCount = await prisma.bagLabel.count({
+    where: { updatedById: userId }
+  });
+  
+  if (bagLabelsUpdatedCount > 0) return true;
+  
+  // Check for transactions created
+  const transactionsCount = await prisma.transaction.count({
+    where: { registeredById: userId }
+  });
+  
+  if (transactionsCount > 0) return true;
+  
+  // No relations found
+  return false;
+}
 
 /**
  * Change user password
