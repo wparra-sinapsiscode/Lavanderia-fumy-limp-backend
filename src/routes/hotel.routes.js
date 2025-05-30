@@ -28,4 +28,10 @@ router.put('/:id/inventory', isAdmin, hotelController.updateInventory);
 // Get services for a specific hotel
 router.get('/:id/services', hotelController.getHotelServices);
 
+// Check hotel dependencies before deletion (admin only)
+router.get('/:id/dependencies', isAdmin, hotelController.checkHotelDependencies);
+
+// Delete hotel (admin only)
+router.delete('/:id', isAdmin, hotelController.deleteHotel);
+
 module.exports = router;

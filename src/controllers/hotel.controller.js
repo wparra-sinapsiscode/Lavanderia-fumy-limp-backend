@@ -429,4 +429,316 @@ exports.getHotelServices = async (req, res) => {
   }
 };
 
+/**
+ * Check hotel dependencies before deletion
+ * @route GET /api/hotels/:id/dependencies
+ * @access Admin only
+ */
+exports.checkHotelDependencies = async (req, res) => {
+  try {
+    // Check if hotel exists
+    const hotel = await prisma.hotel.findUnique({
+      where: {
+        id: req.params.id
+      }
+    });
+    
+    if (!hotel) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hotel no encontrado'
+      });
+    }
+    
+    // Check for dependencies across related entities
+    const dependencies = {
+      services: 0,
+      bagLabels: 0,
+      transactions: 0
+    };
+    
+    // Count services associated with this hotel
+    dependencies.services = await prisma.service.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    // Count bag labels associated with this hotel
+    dependencies.bagLabels = await prisma.bagLabel.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    // Count transactions associated with this hotel
+    dependencies.transactions = await prisma.transaction.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    // Calculate total dependencies
+    const totalDependencies = dependencies.services + dependencies.bagLabels + dependencies.transactions;
+    const hasDependencies = totalDependencies > 0;
+    
+    return res.status(200).json({
+      success: true,
+      data: {
+        id: hotel.id,
+        name: hotel.name,
+        dependencies,
+        totalDependencies,
+        hasDependencies,
+        canDelete: !hasDependencies
+      }
+    });
+  } catch (error) {
+    console.error('Error checking hotel dependencies:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al verificar dependencias del hotel',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Delete hotel
+ * @route DELETE /api/hotels/:id
+ * @access Admin only
+ */
+exports.deleteHotel = async (req, res) => {
+  try {
+    // Check if hotel exists
+    const hotel = await prisma.hotel.findUnique({
+      where: {
+        id: req.params.id
+      }
+    });
+    
+    if (!hotel) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hotel no encontrado'
+      });
+    }
+    
+    // Check for dependencies before deletion
+    const serviceDependencies = await prisma.service.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    const bagLabelDependencies = await prisma.bagLabel.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    const transactionDependencies = await prisma.transaction.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    const totalDependencies = serviceDependencies + bagLabelDependencies + transactionDependencies;
+    
+    // If dependencies exist, prevent deletion
+    if (totalDependencies > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede eliminar el hotel porque tiene registros relacionados',
+        dependencies: {
+          services: serviceDependencies,
+          bagLabels: bagLabelDependencies,
+          transactions: transactionDependencies,
+          total: totalDependencies
+        }
+      });
+    }
+    
+    // Delete the hotel
+    await prisma.hotel.delete({
+      where: {
+        id: req.params.id
+      }
+    });
+    
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        action: AUDIT_ACTIONS.HOTEL_DELETED,
+        entity: 'hotel',
+        entityId: hotel.id,
+        details: `Hotel eliminado: ${hotel.name} (${hotel.zone})`,
+        userId: req.user.id
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Hotel eliminado exitosamente'
+    });
+  } catch (error) {
+    console.error('Error deleting hotel:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al eliminar hotel',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Check if hotel has dependencies that prevent deletion
+ * @route GET /api/hotels/:id/dependencies
+ * @access Admin only
+ */
+exports.checkHotelDependencies = async (req, res) => {
+  try {
+    // Check if hotel exists
+    const hotel = await prisma.hotel.findUnique({
+      where: {
+        id: req.params.id
+      }
+    });
+    
+    if (!hotel) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hotel no encontrado'
+      });
+    }
+    
+    // Check for related services
+    const servicesCount = await prisma.service.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    // Check for related bag labels
+    const bagLabelsCount = await prisma.bagLabel.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    // Check for related transactions
+    const transactionsCount = await prisma.transaction.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    const hasDependencies = servicesCount > 0 || bagLabelsCount > 0 || transactionsCount > 0;
+    
+    return res.status(200).json({
+      success: true,
+      data: {
+        canDelete: !hasDependencies,
+        dependencies: {
+          services: servicesCount,
+          bagLabels: bagLabelsCount,
+          transactions: transactionsCount
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error checking hotel dependencies:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al verificar dependencias del hotel',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Delete hotel if it has no dependencies
+ * @route DELETE /api/hotels/:id
+ * @access Admin only
+ */
+exports.deleteHotel = async (req, res) => {
+  try {
+    // Check if hotel exists
+    const hotel = await prisma.hotel.findUnique({
+      where: {
+        id: req.params.id
+      }
+    });
+    
+    if (!hotel) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hotel no encontrado'
+      });
+    }
+    
+    // Check for dependencies
+    const servicesCount = await prisma.service.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    const bagLabelsCount = await prisma.bagLabel.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    const transactionsCount = await prisma.transaction.count({
+      where: {
+        hotelId: req.params.id
+      }
+    });
+    
+    // If hotel has any dependencies, prevent deletion
+    if (servicesCount > 0 || bagLabelsCount > 0 || transactionsCount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede eliminar este hotel porque tiene registros relacionados',
+        dependencies: {
+          services: servicesCount,
+          bagLabels: bagLabelsCount,
+          transactions: transactionsCount
+        }
+      });
+    }
+    
+    // Delete hotel if no dependencies
+    await prisma.hotel.delete({
+      where: {
+        id: req.params.id
+      }
+    });
+    
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        action: AUDIT_ACTIONS.HOTEL_DELETED,
+        entity: 'hotel',
+        entityId: req.params.id,
+        details: `Hotel eliminado: ${hotel.name} (${hotel.zone})`,
+        userId: req.user.id
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: `Hotel ${hotel.name} eliminado exitosamente`
+    });
+  } catch (error) {
+    console.error('Error deleting hotel:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al eliminar hotel',
+      error: error.message
+    });
+  }
+};
+
 module.exports = exports;
