@@ -94,7 +94,7 @@ exports.getHotelById = async (req, res) => {
  */
 exports.createHotel = async (req, res) => {
   try {
-    const { name, address, zone, contactPerson, phone, email, bagInventory, pricePerKg } = req.body;
+    const { name, address, latitude, longitude, zone, contactPerson, phone, email, bagInventory, pricePerKg } = req.body;
     
     // Check if hotel with the same name already exists
     const existingHotel = await prisma.hotel.findFirst({
@@ -114,6 +114,8 @@ exports.createHotel = async (req, res) => {
       data: {
         name,
         address,
+        latitude: latitude ? parseFloat(latitude) : null,
+        longitude: longitude ? parseFloat(longitude) : null,
         zone,
         contactPerson,
         phone,
@@ -156,7 +158,7 @@ exports.createHotel = async (req, res) => {
  */
 exports.updateHotel = async (req, res) => {
   try {
-    const { name, address, zone, contactPerson, phone, email, pricePerKg } = req.body;
+    const { name, address, latitude, longitude, zone, contactPerson, phone, email, pricePerKg } = req.body;
     
     // Check if hotel exists
     const hotel = await prisma.hotel.findUnique({
@@ -203,6 +205,15 @@ exports.updateHotel = async (req, res) => {
       email: email || hotel.email,
       pricePerKg: pricePerKg ? parseFloat(pricePerKg) : hotel.pricePerKg
     };
+    
+    // Agregar coordenadas GPS si se proporcionan
+    if (latitude !== undefined) {
+      updateData.latitude = latitude ? parseFloat(latitude) : null;
+    }
+    
+    if (longitude !== undefined) {
+      updateData.longitude = longitude ? parseFloat(longitude) : null;
+    }
     
     // Si se proporciona bagInventory, incluirlo en la actualización
     if (bagInventory !== undefined) {

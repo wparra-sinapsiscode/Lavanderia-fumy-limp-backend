@@ -118,6 +118,8 @@ model Hotel {
   id              String    @id @default(uuid())
   name            String    @unique
   address         String
+  latitude        Float?
+  longitude       Float?
   zone            Zone
   contactPerson   String
   phone           String
