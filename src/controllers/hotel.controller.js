@@ -191,20 +191,30 @@ exports.updateHotel = async (req, res) => {
       }
     }
     
-    // Update hotel data
+    // Update hotel data - asegurar que bagInventory se incluya si está presente
+    const { bagInventory } = req.body;
+    
+    const updateData = {
+      name: name || hotel.name,
+      address: address || hotel.address,
+      zone: zone || hotel.zone,
+      contactPerson: contactPerson || hotel.contactPerson,
+      phone: phone || hotel.phone,
+      email: email || hotel.email,
+      pricePerKg: pricePerKg ? parseFloat(pricePerKg) : hotel.pricePerKg
+    };
+    
+    // Si se proporciona bagInventory, incluirlo en la actualización
+    if (bagInventory !== undefined) {
+      updateData.bagInventory = parseInt(bagInventory);
+      console.log(`Actualizando inventario de bolsas para hotel ${req.params.id}: ${hotel.bagInventory} → ${bagInventory}`);
+    }
+    
     const updatedHotel = await prisma.hotel.update({
       where: {
         id: req.params.id
       },
-      data: {
-        name: name || hotel.name,
-        address: address || hotel.address,
-        zone: zone || hotel.zone,
-        contactPerson: contactPerson || hotel.contactPerson,
-        phone: phone || hotel.phone,
-        email: email || hotel.email,
-        pricePerKg: pricePerKg ? parseFloat(pricePerKg) : hotel.pricePerKg
-      }
+      data: updateData
     });
     
     // Create audit log
