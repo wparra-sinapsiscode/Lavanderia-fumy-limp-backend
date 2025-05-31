@@ -30,38 +30,17 @@ exports.createService = async (req, res) => {
       });
     }
     
-    // Check if repartidor exists (if provided)
-    if (repartidorId) {
-      const repartidor = await prisma.user.findUnique({
-        where: {
-          id: repartidorId,
-          role: 'REPARTIDOR'
-        }
-      });
-      
-      if (!repartidor) {
-        return res.status(404).json({
-          success: false,
-          message: 'Repartidor no encontrado'
-        });
-      }
-      
-      // Check if repartidor zone matches hotel zone
-      if (repartidor.zone !== hotel.zone) {
-        return res.status(400).json({
-          success: false,
-          message: 'El repartidor debe estar asignado a la misma zona que el hotel'
-        });
-      }
-    }
+    // Eliminamos la validación obligatoria del repartidor para permitir
+    // que los servicios se creen sin asignar un repartidor específico, solo con la zona
+    // Los repartidores de cada zona podrán ver los servicios de su zona y tomarlos
     
-    // Create service
+    // Create service - ahora siempre sin repartidor
     const service = await prisma.service.create({
       data: {
         hotelId,
         guestName,
         roomNumber: guestRoom,
-        repartidorId: repartidorId || null,
+        repartidorId: null, // Siempre null para que cualquier repartidor de la zona pueda tomarlo
         bagCount: parseInt(bagCount, 10) || 1,
         weight: weight ? parseFloat(weight) : null,
         priority: priority || 'NORMAL',
@@ -922,7 +901,34 @@ exports.getMyServices = async (req, res) => {
     let where = {};
     
     if (role === 'REPARTIDOR') {
-      where.repartidorId = id;
+      // Obtener la zona del repartidor
+      const repartidor = await prisma.user.findUnique({
+        where: { id }
+      });
+      
+      if (!repartidor) {
+        return res.status(404).json({
+          success: false,
+          message: 'Repartidor no encontrado'
+        });
+      }
+      
+      // Ahora construimos un OR para mostrar:
+      // 1. Servicios específicamente asignados a este repartidor
+      // 2. Servicios de hoteles en la zona del repartidor que aún no tienen repartidor asignado
+      where = {
+        OR: [
+          // Servicios específicamente asignados a este repartidor
+          { repartidorId: id },
+          // Servicios sin repartidor asignado, pero en hoteles de la zona del repartidor
+          { 
+            repartidorId: null,
+            hotel: {
+              zone: repartidor.zone
+            }
+          }
+        ]
+      };
     } else if (role === 'HOTEL') {
       // Get hotel ID for hotel user
       const hotel = await prisma.hotel.findFirst({
@@ -1013,8 +1019,9 @@ exports.getPendingServices = async (req, res) => {
     
     // Build filter conditions
     const where = {
-      status: 'PENDING_PICKUP',
-      repartidorId: null // Only services not yet assigned to a repartidor
+      status: 'PENDING_PICKUP'
+      // Ya no filtramos por repartidorId: null para que muestre todos los pendientes de la zona,
+      // tanto los que no tienen repartidor asignado como los que ya lo tienen
     };
     
     // Zone filtering (requires join with hotel)
