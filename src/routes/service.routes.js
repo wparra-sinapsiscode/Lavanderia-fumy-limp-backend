@@ -27,7 +27,51 @@ router.get(
   serviceController.getAllServices
 );
 
-// Get service by ID
+// Get services by hotel
+router.get(
+  '/hotel/:hotelId',
+  authMiddleware.verifyToken,
+  serviceController.getServicesByHotel
+);
+
+// Get services by repartidor
+router.get(
+  '/repartidor/:repartidorId',
+  authMiddleware.verifyToken,
+  serviceController.getServicesByRepartidor
+);
+
+// Get services assigned to current user
+router.get(
+  '/my-services',
+  authMiddleware.verifyToken,
+  serviceController.getMyServices
+);
+
+// Añadir nuevo endpoint para repartidores (alias de my-services)
+router.get(
+  '/repartidor',
+  authMiddleware.verifyToken,
+  serviceController.getMyServices
+);
+
+// Get pending services for repartidores to pick up
+router.get(
+  '/pending',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN', 'RECEPCION', 'REPARTIDOR']),
+  serviceController.getPendingServices
+);
+
+// Get service statistics
+router.get(
+  '/stats',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN']),
+  serviceController.getServiceStats
+);
+
+// Get service by ID - IMPORTANTE: Esta ruta debe ir DESPUÉS de las rutas específicas
 router.get(
   '/:id',
   authMiddleware.verifyToken,
@@ -63,43 +107,6 @@ router.delete(
   authMiddleware.verifyToken,
   authMiddleware.hasRole(['ADMIN']),
   serviceController.deleteService
-);
-
-// Get services by hotel
-router.get(
-  '/hotel/:hotelId',
-  authMiddleware.verifyToken,
-  serviceController.getServicesByHotel
-);
-
-// Get services by repartidor
-router.get(
-  '/repartidor/:repartidorId',
-  authMiddleware.verifyToken,
-  serviceController.getServicesByRepartidor
-);
-
-// Get services assigned to current user
-router.get(
-  '/my-services',
-  authMiddleware.verifyToken,
-  serviceController.getMyServices
-);
-
-// Get pending services for repartidores to pick up
-router.get(
-  '/pending',
-  authMiddleware.verifyToken,
-  authMiddleware.hasRole(['ADMIN', 'RECEPCION', 'REPARTIDOR']),
-  serviceController.getPendingServices
-);
-
-// Get service statistics
-router.get(
-  '/stats',
-  authMiddleware.verifyToken,
-  authMiddleware.hasRole(['ADMIN']),
-  serviceController.getServiceStats
 );
 
 module.exports = router;

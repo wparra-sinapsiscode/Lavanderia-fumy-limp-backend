@@ -351,7 +351,7 @@ exports.getServiceById = async (req, res) => {
             name: true,
             zone: true,
             contactPerson: true,
-            contactPhone: true
+            phone: true
           }
         },
         repartidor: {
