@@ -225,35 +225,11 @@ exports.getRoutes = async (req, res) => {
     } catch (dbError) {
       console.error('Error de conexión a la base de datos:', dbError);
       
-      // Si hay un error en la conexión a la base de datos, usar datos de mock
-      if (date) {
-        // Importar el generador de rutas mock
-        const { getMockRoutes } = require('../mock/mockRoutes');
-        
-        // Generar rutas mock según los filtros
-        const mockRoutes = getMockRoutes(
-          date, 
-          repartidorId || 'mock-repartidor-1',
-          repartidorId ? 'Repartidor Asignado' : 'Repartidor Ejemplo',
-          'mixed',
-          3 // Generar 3 rutas de ejemplo
-        );
-        
-        console.log(`Usando ${mockRoutes.length} rutas mock para la fecha ${date}`);
-        return res.status(200).json({
-          success: true,
-          count: mockRoutes.length,
-          data: mockRoutes,
-          fromMock: true
-        });
-      }
-      
-      // Si no hay fecha, devolver array vacío para evitar errores en el frontend
-      return res.status(200).json({
-        success: true,
-        count: 0,
-        data: [],
-        message: 'No se encontraron rutas'
+      // Mejor manejo de errores de conexión a la base de datos
+      return res.status(503).json({
+        success: false,
+        message: 'Error de conexión a la base de datos. Por favor, inténtelo de nuevo más tarde.',
+        error: 'DATABASE_CONNECTION_ERROR'
       });
     }
 
@@ -399,16 +375,11 @@ exports.getRouteById = async (req, res) => {
     } catch (dbError) {
       console.error('Error de conexión a la base de datos:', dbError);
       
-      // Si hay un error de conexión, usar datos mock para este ID
-      const { getMockRouteById } = require('../mock/mockRoutes');
-      const mockRoute = getMockRouteById(id);
-      
-      // Devolver la ruta mock
-      console.log(`Usando ruta mock para ID ${id}`);
-      return res.status(200).json({
-        success: true,
-        data: mockRoute,
-        fromMock: true
+      // Mejor manejo de errores de conexión a la base de datos
+      return res.status(503).json({
+        success: false,
+        message: 'Error de conexión a la base de datos. Por favor, inténtelo de nuevo más tarde.',
+        error: 'DATABASE_CONNECTION_ERROR'
       });
     }
 
@@ -1218,6 +1189,22 @@ exports.optimizeRoute = async (req, res) => {
   try {
     const { id } = req.params;
     const { startLatitude, startLongitude } = req.body;
+    
+    // Validar que se proporcionaron coordenadas de inicio
+    if (!startLatitude || !startLongitude) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requieren las coordenadas de inicio (startLatitude y startLongitude) para optimizar la ruta'
+      });
+    }
+    
+    // Validar que las coordenadas son números válidos
+    if (isNaN(parseFloat(startLatitude)) || isNaN(parseFloat(startLongitude))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Las coordenadas de inicio deben ser valores numéricos válidos'
+      });
+    }
 
     // Verificar que la ruta existe
     const route = await prisma.route.findUnique({
@@ -1240,13 +1227,15 @@ exports.optimizeRoute = async (req, res) => {
 
     // Verificar que todos los hoteles tienen coordenadas
     const stopsWithoutCoordinates = route.stops.filter(
-      stop => !stop.hotel.latitude || !stop.hotel.longitude
+      stop => !stop.hotel.latitude || !stop.hotel.longitude || 
+             isNaN(parseFloat(stop.hotel.latitude)) || 
+             isNaN(parseFloat(stop.hotel.longitude))
     );
 
     if (stopsWithoutCoordinates.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'No se puede optimizar la ruta porque algunos hoteles no tienen coordenadas',
+        message: 'No se puede optimizar la ruta porque algunos hoteles no tienen coordenadas válidas',
         hotelsWithoutCoordinates: stopsWithoutCoordinates.map(stop => ({
           id: stop.hotel.id,
           name: stop.hotel.name
@@ -1407,6 +1396,15 @@ exports.generateRecommendedRoute = async (req, res) => {
     const params = { ...req.query, ...req.body };
     const { repartidorId, date, zone, type = 'mixed' } = params;
 
+    // Validate route type
+    if (type && !['pickup', 'delivery', 'mixed'].includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El tipo de ruta debe ser uno de los siguientes: pickup, delivery, mixed',
+        error: 'INVALID_ROUTE_TYPE'
+      });
+    }
+
     // If no date is provided, default to today
     const routeDate = date || new Date().toISOString().split('T')[0];
 
@@ -1453,7 +1451,7 @@ exports.generateRecommendedRoute = async (req, res) => {
         if (allRoutes.length === 0) {
           return res.status(200).json({
             success: true,
-            message: 'No se pudieron generar rutas para ningún repartidor',
+            message: 'No hay servicios pendientes para el día y criterios especificados',
             data: []
           });
         }
@@ -1473,8 +1471,8 @@ exports.generateRecommendedRoute = async (req, res) => {
         });
 
         if (!repartidor || repartidor.role !== 'REPARTIDOR') {
-          return res.status(200).json({
-            success: true,
+          return res.status(400).json({
+            success: false,
             message: 'El repartidor especificado no existe o no tiene el rol adecuado',
             data: []
           });
@@ -1504,27 +1502,11 @@ exports.generateRecommendedRoute = async (req, res) => {
     } catch (dbError) {
       console.error('Error de conexión a la base de datos:', dbError);
       
-      // Si hay un error de conexión, usar datos mock
-      const { getMockRoutes } = require('../mock/mockRoutes');
-      
-      // Generar ruta de ejemplo
-      const mockRoutes = getMockRoutes(
-        routeDate,
-        repartidorId || 'mock-repartidor-1',
-        repartidorId ? 'Repartidor Asignado' : 'Repartidor Ejemplo',
-        type,
-        repartidorId ? 1 : 2 // Generar 1 ruta si se especifica repartidor, 2 si no
-      );
-      
-      // Asegurar que siempre devolvemos un array para mantener consistencia
-      const responseData = repartidorId ? [mockRoutes[0]] : mockRoutes;
-      
-      console.log(`Usando ${responseData.length} ruta(s) mock para la fecha ${routeDate}`);
-      return res.status(201).json({
-        success: true,
-        message: 'Ruta(s) generada(s) exitosamente (datos de ejemplo)',
-        data: responseData,
-        fromMock: true
+      // Mejor manejo de errores de conexión a la base de datos
+      return res.status(503).json({
+        success: false,
+        message: 'Error de conexión a la base de datos. Por favor, inténtelo de nuevo más tarde.',
+        error: 'DATABASE_CONNECTION_ERROR'
       });
     }
   } catch (error) {
@@ -1761,14 +1743,15 @@ function formatRouteForFrontend(routeData) {
       hotelName: stop.hotel.name,
       hotelAddress: stop.hotel.address,
       hotelZone: stop.hotel.zone,
-      latitude: stop.hotel.latitude,
-      longitude: stop.hotel.longitude,
+      latitude: stop.hotel.latitude || null,
+      longitude: stop.hotel.longitude || null,
       pickups,
       deliveries,
       services: stop.service ? [stop.service] : [],
       estimatedTime: stop.scheduledTime ? new Date(stop.scheduledTime).toLocaleTimeString('es-PE') : null,
       completed: stop.status === 'COMPLETED',
-      timeSpent: 0
+      timeSpent: 0,
+      notes: stop.notes || ''
     };
   });
   
@@ -1777,12 +1760,18 @@ function formatRouteForFrontend(routeData) {
   
   return {
     ...route,
+    id: route.id,
     routeNumber: routeNumber || 1,
     repartidorName: route.repartidor?.name || 'Desconocido',
+    repartidorId: route.repartidorId,
+    date: route.date ? new Date(route.date).toISOString() : null,
+    startTime: route.startTime ? new Date(route.startTime).toISOString() : null,
+    endTime: route.endTime ? new Date(route.endTime).toISOString() : null,
     status: statusMap[route.status] || 'pendiente',
     totalPickups: stats.totalPickups,
     totalDeliveries: stats.totalDeliveries,
     estimatedDuration,
+    totalDistance: route.totalDistance || 0,
     hotels,
     // Ensure these fields are present for frontend compatibility
     type: stats.totalPickups > stats.totalDeliveries ? 'pickup' : 
