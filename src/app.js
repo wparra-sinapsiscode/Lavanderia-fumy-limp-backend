@@ -18,7 +18,16 @@ const apiRoutes = require('./routes/index');
 const app = express();
 
 // Connect to database
-connectToDatabase();
+connectToDatabase().then(success => {
+  if (success) {
+    console.log('Database connection initialized');
+  } else {
+    console.error('Unable to connect to database on startup');
+    console.warn('La aplicación usará datos de ejemplo cuando sea necesario.');
+    console.warn('Para solucionar problemas de conexión a PostgreSQL, vea el archivo POSTGRES_WSL_CONFIG.md');
+    console.warn('O ejecute: node test-postgres.js');
+  }
+});
 
 // Middleware
 app.use(cors({
@@ -60,14 +69,19 @@ const cleanupExpiredTokens = async () => {
     console.log(`Cleaned up ${result.count} expired tokens`);
   } catch (error) {
     console.error('Error cleaning up expired tokens:', error);
+    console.warn('No se pudieron limpiar tokens expirados. Posible problema de conexión a la base de datos.');
   }
 };
 
 // Run cleanup every 24 hours
 setInterval(cleanupExpiredTokens, 24 * 60 * 60 * 1000);
 
-// Run an initial cleanup on startup
-cleanupExpiredTokens();
+// Run an initial cleanup on startup - con manejo de errores
+try {
+  cleanupExpiredTokens();
+} catch (error) {
+  console.error('Error durante la limpieza inicial de tokens:', error);
+}
 
 // 404 handler
 app.use((req, res) => {

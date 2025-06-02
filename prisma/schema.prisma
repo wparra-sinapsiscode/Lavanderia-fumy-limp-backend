@@ -17,6 +17,13 @@ enum UserRole {
   REPARTIDOR
 }
 
+enum RouteStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
 enum Zone {
   NORTE
   SUR
@@ -108,6 +115,7 @@ model User {
   transactionsCreated Transaction[]  @relation("TransactionCreator")
   auditLogs           AuditLog[]     @relation("AuditCreator")
   revokedTokens       RevokedToken[]
+  routes              Route[]
 
   @@index([email])
   @@index([zone])
@@ -133,6 +141,7 @@ model Hotel {
   services        Service[]
   bagLabels       BagLabel[]
   transactions    Transaction[]
+  routeStops      RouteStop[]
 
   @@index([zone])
 }
@@ -178,6 +187,7 @@ model Service {
   bagLabels               BagLabel[]
   transactions            Transaction[]
   auditLogs               AuditLog[]
+  routeStops              RouteStop[]
 
   @@index([hotelId])
   @@index([repartidorId])
@@ -294,4 +304,49 @@ model RevokedToken {
   @@index([token])
   @@index([userId])
   @@index([expiresAt])
+}
+
+model Route {
+  id              String       @id @default(uuid())
+  name            String
+  date            DateTime
+  repartidorId    String
+  status          RouteStatus  @default(PLANNED)
+  startTime       DateTime?
+  endTime         DateTime?
+  totalDistance   Float?       // in kilometers
+  notes           String?      @db.Text
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  // Relations
+  repartidor      User         @relation(fields: [repartidorId], references: [id])
+  stops           RouteStop[]
+  
+  @@index([repartidorId])
+  @@index([date])
+  @@index([status])
+}
+
+model RouteStop {
+  id              String    @id @default(uuid())
+  routeId         String
+  serviceId       String?
+  hotelId         String
+  order           Int
+  status          String    @default("PENDING")  // PENDING, COMPLETED, SKIPPED
+  scheduledTime   DateTime?
+  actualTime      DateTime?
+  notes           String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  route           Route     @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  hotel           Hotel     @relation(fields: [hotelId], references: [id])
+  service         Service?  @relation(fields: [serviceId], references: [id])
+
+  @@index([routeId])
+  @@index([hotelId])
+  @@index([serviceId])
 }
