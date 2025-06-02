@@ -3,8 +3,8 @@
  * Handles business logic for managing delivery and pickup routes
  */
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+// Importar solo la instancia de prisma desde la configuración
+const { prisma } = require('../config/database');
 
 /**
  * Helper function to check if a service is a pickup service
