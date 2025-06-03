@@ -539,6 +539,7 @@ exports.updateServiceStatus = async (req, res) => {
     // Validate status transition
     const validStatuses = [
       'PENDING_PICKUP',
+      'ASSIGNED_TO_ROUTE', // ✨ NUEVO estado
       'PICKED_UP',
       'LABELED',
       'IN_PROCESS',

@@ -2011,47 +2011,70 @@ exports.generateAutomaticRoutes = async (req, res) => {
       // Crear UNA SOLA ruta para toda la zona
       const routeName = `Ruta ${zone} - Recogida ${new Date(date).toLocaleDateString('es-PE')}`;
       
-      const route = await prisma.route.create({
-        data: {
-          name: routeName,
-          date: new Date(date),
-          repartidorId: repartidor.id,
-          status: 'PLANNED',
-          notes: `Zona: ${zone} | ${totalHotels} hotel(es) | ${totalServices} servicio(s) | ${totalBags} bolsa(s)`,
-          stops: {
-            create: (() => {
-              const stops = [];
-              let stopOrder = 1;
-              
-              sortedHotels.forEach((hotelData, hotelIndex) => {
-                const hotelServices = hotelData.services;
-                
-                // Create one stop per service
-                hotelServices.forEach((service) => {
-                  stops.push({
-                    hotelId: hotelData.hotel.id,
-                    serviceId: service.id, // ✅ Associate each service
-                    order: stopOrder++,
-                    status: 'PENDING',
-                    scheduledTime: calculateScheduledTimeWithDuration(date, hotelIndex, sortedHotels),
-                    notes: `${service.guestName} - Hab. ${service.roomNumber} | ${service.bagCount} bolsa(s) | ${service.priority}`
-                  });
-                });
-              });
-              
-              return stops;
-            })()
+      const route = await prisma.$transaction(async (tx) => {
+        // First create the route
+        const createdRoute = await tx.route.create({
+          data: {
+            name: routeName,
+            date: new Date(date),
+            repartidorId: repartidor.id,
+            status: 'PLANNED',
+            notes: `Zona: ${zone} | ${totalHotels} hotel(es) | ${totalServices} servicio(s) | ${totalBags} bolsa(s)`
           }
-        },
-        include: {
-          stops: {
-            include: {
-              hotel: true,
-              service: true
-            }
-          },
-          repartidor: true
+        });
+
+        // Then create stops and update service assignments
+        const stops = [];
+        let stopOrder = 1;
+        
+        for (const hotelData of sortedHotels) {
+          const hotelServices = hotelData.services;
+          
+          for (const service of hotelServices) {
+            // ✅ UPDATE SERVICE REPARTIDOR ASSIGNMENT
+            await tx.service.update({
+              where: { id: service.id },
+              data: { repartidorId: repartidor.id }
+            });
+
+            // Create the stop
+            const stop = await tx.routeStop.create({
+              data: {
+                routeId: createdRoute.id,
+                hotelId: hotelData.hotel.id,
+                serviceId: service.id,
+                order: stopOrder++,
+                status: 'PENDING',
+                scheduledTime: calculateScheduledTimeWithDuration(date, sortedHotels.indexOf(hotelData), sortedHotels),
+                notes: `${service.guestName} - Hab. ${service.roomNumber} | ${service.bagCount} bolsa(s) | ${service.priority}`
+              },
+              include: {
+                hotel: true,
+                service: true
+              }
+            });
+            
+            stops.push(stop);
+          }
         }
+
+        // Get repartidor info
+        const repartidor_info = await tx.user.findUnique({
+          where: { id: repartidor.id },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            zone: true
+          }
+        });
+
+        // Return route with all data
+        return {
+          ...createdRoute,
+          stops,
+          repartidor: repartidor_info
+        };
       });
       
       generatedRoutes.push(route);
@@ -2242,6 +2265,12 @@ async function generateRouteForZone(repartidorId, date, zone, services) {
       for (let serviceIndex = 0; serviceIndex < hotelServices.length; serviceIndex++) {
         const service = hotelServices[serviceIndex];
         const estimatedTime = calculateTimeForHotel([service]); // Time for this specific service
+        
+        // ✅ UPDATE SERVICE REPARTIDOR ASSIGNMENT
+        await tx.service.update({
+          where: { id: service.id },
+          data: { repartidorId }
+        });
         
         const routeStop = await tx.routeStop.create({
           data: {
