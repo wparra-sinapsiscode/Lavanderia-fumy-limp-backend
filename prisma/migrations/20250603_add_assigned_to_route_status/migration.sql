@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "ServiceStatus" ADD VALUE 'ASSIGNED_TO_ROUTE';

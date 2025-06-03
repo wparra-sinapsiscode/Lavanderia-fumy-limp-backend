@@ -558,32 +558,24 @@ exports.updateServiceStatus = async (req, res) => {
     
     // Prepare status specific data
     const updateData = {
-      status,
-      statusNotes: notes
+      status
     };
     
-    // Add timestamps based on status
+    // Add notes to observations field if provided
+    if (notes) {
+      updateData.observations = notes;
+    }
+    
+    // Add timestamps based on status (only for fields that exist)
     switch (status) {
       case 'PICKED_UP':
         updateData.pickupDate = new Date();
         break;
-      case 'LABELED':
-        updateData.labelDate = new Date();
-        break;
-      case 'IN_PROCESS':
-        updateData.processDate = new Date();
-        break;
-      case 'READY_FOR_DELIVERY':
-        updateData.readyDate = new Date();
-        break;
-      case 'PARTIAL_DELIVERY':
-        updateData.partialDeliveryDate = new Date();
-        break;
       case 'COMPLETED':
-        updateData.completionDate = new Date();
+        updateData.deliveryDate = new Date();
         break;
-      case 'CANCELLED':
-        updateData.cancellationDate = new Date();
+      case 'ASSIGNED_TO_ROUTE':
+        // Just update the status, no special timestamp needed
         break;
     }
     
