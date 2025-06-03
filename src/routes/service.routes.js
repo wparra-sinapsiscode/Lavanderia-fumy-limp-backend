@@ -134,6 +134,20 @@ router.post(
   serviceController.calculatePrice
 );
 
+// Get service labels
+router.get(
+  '/:id/labels',
+  authMiddleware.verifyToken,
+  serviceController.getServiceLabels
+);
+
+// Create service labels
+router.post(
+  '/:id/labels',
+  authMiddleware.verifyToken,
+  serviceController.createServiceLabels
+);
+
 // Delete service
 router.delete(
   '/:id',

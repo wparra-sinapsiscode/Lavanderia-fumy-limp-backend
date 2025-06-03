@@ -1548,3 +1548,150 @@ exports.getServiceStats = async (req, res) => {
     });
   }
 };
+
+// Get service labels
+exports.getServiceLabels = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if service exists
+    const service = await prisma.service.findUnique({
+      where: { id }
+    });
+    
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio no encontrado'
+      });
+    }
+    
+    // Get all labels for this service
+    const labels = await prisma.bagLabel.findMany({
+      where: { serviceId: id },
+      include: {
+        registeredBy: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
+        updatedBy: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
+      },
+      orderBy: {
+        bagNumber: 'asc'
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Rótulos del servicio obtenidos exitosamente',
+      data: labels
+    });
+  } catch (error) {
+    console.error('Error getting service labels:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al obtener rótulos del servicio',
+      error: error.message
+    });
+  }
+};
+
+// Create service labels
+exports.createServiceLabels = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { labels } = req.body;
+    const userId = req.user.id;
+    
+    // Check if service exists
+    const service = await prisma.service.findUnique({
+      where: { id },
+      include: {
+        hotel: true
+      }
+    });
+    
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio no encontrado'
+      });
+    }
+    
+    if (!labels || !Array.isArray(labels) || labels.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere al menos un rótulo'
+      });
+    }
+    
+    // Create labels in transaction
+    const createdLabels = await prisma.$transaction(async (tx) => {
+      const results = [];
+      
+      for (let i = 0; i < labels.length; i++) {
+        const labelData = labels[i];
+        
+        // Generate unique label code if not provided
+        const labelCode = labelData.label || `ROT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${service.id.slice(-4).toUpperCase()}-${(i + 1).toString().padStart(2, '0')}`;
+        
+        const newLabel = await tx.bagLabel.create({
+          data: {
+            serviceId: id,
+            hotelId: service.hotelId,
+            label: labelCode,
+            bagNumber: i + 1,
+            photo: labelData.photo || '',
+            registeredById: userId,
+            status: 'LABELED',
+            generatedAt: 'LAVANDERIA',
+            observations: labelData.observations || null
+          },
+          include: {
+            registeredBy: {
+              select: {
+                id: true,
+                name: true
+              }
+            }
+          }
+        });
+        
+        results.push(newLabel);
+      }
+      
+      // Update service status to LABELED if not already
+      if (service.status === 'PICKED_UP') {
+        await tx.service.update({
+          where: { id },
+          data: {
+            status: 'LABELED',
+            labeledDate: new Date()
+          }
+        });
+      }
+      
+      return results;
+    });
+    
+    return res.status(201).json({
+      success: true,
+      message: `${createdLabels.length} rótulo(s) creado(s) exitosamente`,
+      data: createdLabels
+    });
+  } catch (error) {
+    console.error('Error creating service labels:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al crear rótulos del servicio',
+      error: error.message
+    });
+  }
+};
