@@ -296,10 +296,20 @@ exports.getRoutes = async (req, res) => {
         }
       });
       
-      const hotels = Array.from(hotelMap.values());
+      // Update estimated times for each hotel based on their services
+      const hotels = Array.from(hotelMap.values()).map(hotel => {
+        const hotelTime = calculateTimeForHotel(hotel.services);
+        return {
+          ...hotel,
+          estimatedTimeMinutes: hotelTime,
+          estimatedTime: hotel.estimatedTime // Keep original scheduled time
+        };
+      });
       
-      // Calculate estimated duration (45 mins per hotel)
-      const estimatedDuration = hotels.length * 45;
+      // Calculate estimated duration based on actual services and bags
+      const estimatedDuration = hotels.reduce((total, hotel) => {
+        return total + calculateTimeForHotel(hotel.services);
+      }, 0);
       
       return {
         ...route,
@@ -468,10 +478,20 @@ exports.getRouteById = async (req, res) => {
       }
     });
     
-    const hotels = Array.from(hotelMap.values());
+    // Update estimated times for each hotel based on their services
+    const hotels = Array.from(hotelMap.values()).map(hotel => {
+      const hotelTime = calculateTimeForHotel(hotel.services);
+      return {
+        ...hotel,
+        estimatedTimeMinutes: hotelTime,
+        estimatedTime: hotel.estimatedTime // Keep original scheduled time
+      };
+    });
     
-    // Calculate estimated duration (45 mins per hotel)
-    const estimatedDuration = hotels.length * 45;
+    // Calculate estimated duration based on actual services and bags
+    const estimatedDuration = hotels.reduce((total, hotel) => {
+      return total + calculateTimeForHotel(hotel.services);
+    }, 0);
     
     const formattedRoute = {
       ...route,
