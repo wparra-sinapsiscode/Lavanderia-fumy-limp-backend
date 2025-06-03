@@ -1,5 +1,6 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+const path = require('path');
 const { AUDIT_ACTIONS } = require('../config/constants');
 
 // Create a new service
@@ -744,6 +745,273 @@ exports.deleteService = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Error al eliminar servicio',
+      error: error.message
+    });
+  }
+};
+
+// Register pickup data
+exports.registerPickup = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      weight, 
+      bagCount, 
+      observations, 
+      collectorName, 
+      geolocation,
+      price
+    } = req.body;
+    
+    // Check if service exists and include hotel data
+    const existingService = await prisma.service.findUnique({
+      where: { id },
+      include: { hotel: true }
+    });
+    
+    if (!existingService) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio no encontrado'
+      });
+    }
+    
+    // Verify that service is in a valid state for pickup
+    if (existingService.status !== 'PENDING_PICKUP' && existingService.status !== 'ASSIGNED_TO_ROUTE') {
+      return res.status(400).json({
+        success: false,
+        message: `No se puede registrar recojo. El servicio está en estado: ${existingService.status}`
+      });
+    }
+    
+    // Verify that the repartidor is authorized (assigned to the service or same zone)
+    if (req.user.role === 'REPARTIDOR') {
+      const isAssigned = existingService.repartidorId === req.user.id;
+      const isSameZone = req.user.zone === existingService.hotel.zone;
+      
+      if (!isAssigned && !isSameZone) {
+        return res.status(403).json({
+          success: false,
+          message: 'No tienes autorización para recoger este servicio'
+        });
+      }
+    }
+    
+    // Update service with pickup data
+    const updatedService = await prisma.service.update({
+      where: { id },
+      data: {
+        weight: weight ? parseFloat(weight) : null,
+        bagCount: parseInt(bagCount) || existingService.bagCount,
+        observations: observations ? 
+          `${existingService.observations || ''}\n[RECOJO] ${observations}`.trim() : 
+          existingService.observations,
+        collectorName,
+        geolocation,
+        pickupDate: new Date(),
+        price: price ? parseFloat(price) : null,
+        repartidorId: req.user.id,
+        status: 'PICKED_UP',
+        internalNotes: `${existingService.internalNotes || ''}\n[${new Date().toLocaleString()}] Recogido por ${req.user.name}`.trim()
+      },
+      include: {
+        hotel: true,
+        repartidor: true
+      }
+    });
+    
+    // Create a financial transaction for the service
+    if (price) {
+      await prisma.transaction.create({
+        data: {
+          type: 'INCOME',
+          amount: parseFloat(price),
+          incomeCategory: 'SERVICIO_LAVANDERIA',
+          description: `Servicio de lavandería - ${existingService.guestName} (${existingService.hotel.name})`,
+          date: new Date(),
+          paymentMethod: 'EFECTIVO',
+          hotelId: existingService.hotelId,
+          serviceId: id,
+          registeredById: req.user.id
+        }
+      });
+    }
+    
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        action: AUDIT_ACTIONS.SERVICE_PICKED_UP || 'SERVICE_PICKED_UP',
+        entity: 'service',
+        entityId: id,
+        details: `Servicio recogido: ${existingService.guestName}, ${existingService.hotel.name}. Peso: ${weight}kg, Precio: S/${price}`,
+        userId: req.user.id,
+        serviceId: id
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Datos de recojo registrados exitosamente',
+      data: updatedService
+    });
+  } catch (error) {
+    console.error('Error registering pickup:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al registrar recojo',
+      error: error.message
+    });
+  }
+};
+
+// Calculate service price
+exports.calculatePrice = async (req, res) => {
+  try {
+    const { weight, hotelId, serviceType = 'STANDARD' } = req.body;
+    
+    if (!weight || !hotelId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere peso y hotelId para calcular el precio'
+      });
+    }
+    
+    // Get hotel pricing
+    const hotel = await prisma.hotel.findUnique({
+      where: { id: hotelId }
+    });
+    
+    if (!hotel) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hotel no encontrado'
+      });
+    }
+    
+    // Calculate price (weight * price per kg)
+    let price = parseFloat(weight) * parseFloat(hotel.pricePerKg);
+    
+    // Apply service type multipliers
+    if (serviceType === 'EXPRESS') {
+      price *= 1.5; // 50% extra for express service
+    } else if (serviceType === 'PREMIUM') {
+      price *= 2; // 100% extra for premium service
+    }
+    
+    return res.status(200).json({
+      success: true,
+      data: {
+        price: parseFloat(price.toFixed(2)), // Return as number, not string
+        weight: parseFloat(weight),
+        pricePerKg: parseFloat(hotel.pricePerKg),
+        serviceType,
+        hotelName: hotel.name
+      }
+    });
+  } catch (error) {
+    console.error('Error calculating price:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al calcular precio',
+      error: error.message
+    });
+  }
+};
+
+// Upload photos for a service
+exports.uploadPhotos = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const photoUrls = req.body.photoUrls || [];
+    
+    if (!photoUrls || photoUrls.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se recibieron fotos'
+      });
+    }
+    
+    // Get existing service
+    const existingService = await prisma.service.findUnique({
+      where: { id }
+    });
+    
+    if (!existingService) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio no encontrado'
+      });
+    }
+    
+    // Add new photos to existing ones
+    const updatedPhotos = [...(existingService.photos || []), ...photoUrls];
+    
+    // Update service with new photos
+    const updatedService = await prisma.service.update({
+      where: { id },
+      data: {
+        photos: updatedPhotos
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Fotos subidas exitosamente',
+      data: {
+        photos: photoUrls,
+        totalPhotos: updatedPhotos.length
+      }
+    });
+  } catch (error) {
+    console.error('Error uploading photos:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al subir fotos',
+      error: error.message
+    });
+  }
+};
+
+// Upload signature for a service
+exports.uploadSignature = async (req, res) => {
+  try {
+    const { id } = req.params;
+    let signatureUrl = req.body.signatureUrl;
+    
+    // If signature came from processBase64Image middleware
+    if (!signatureUrl && req.file) {
+      const relativePath = req.file.path.replace(path.join(__dirname, '../..'), '');
+      signatureUrl = relativePath.replace(/\\/g, '/');
+    }
+    
+    // If no signature URL from either source
+    if (!signatureUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se recibió la firma'
+      });
+    }
+    
+    // Update service with signature
+    const updatedService = await prisma.service.update({
+      where: { id },
+      data: {
+        signature: signatureUrl
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Firma guardada exitosamente',
+      data: {
+        signature: signatureUrl
+      }
+    });
+  } catch (error) {
+    console.error('Error uploading signature:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al guardar firma',
       error: error.message
     });
   }

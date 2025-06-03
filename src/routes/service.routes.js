@@ -101,6 +101,39 @@ router.patch(
   serviceController.assignRepartidor
 );
 
+// Register pickup data
+router.put(
+  '/:id/pickup',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['REPARTIDOR', 'ADMIN']),
+  serviceController.registerPickup
+);
+
+// Upload service photos
+router.post(
+  '/:id/photos',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['REPARTIDOR', 'ADMIN']),
+  require('../middleware/upload.middleware').uploadServicePhotos,
+  serviceController.uploadPhotos
+);
+
+// Upload service signature
+router.post(
+  '/:id/signature',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['REPARTIDOR', 'ADMIN']),
+  require('../middleware/upload.middleware').uploadSignature,
+  serviceController.uploadSignature
+);
+
+// Calculate service price
+router.post(
+  '/calculate-price',
+  authMiddleware.verifyToken,
+  serviceController.calculatePrice
+);
+
 // Delete service
 router.delete(
   '/:id',
