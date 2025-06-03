@@ -869,6 +869,78 @@ exports.registerPickup = async (req, res) => {
   }
 };
 
+// Update service in route
+exports.updateServiceInRoute = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      routeId, 
+      hotelIndex, 
+      updatedData 
+    } = req.body;
+    
+    console.log('Updating service in route:', { id, routeId, hotelIndex, updatedData });
+    
+    // Filter only valid fields for Prisma update
+    const validFields = [
+      'status', 'weight', 'bagCount', 'observations', 'pickupDate',
+      'collectorName', 'geolocation', 'repartidorId', 'price',
+      'internalNotes', 'estimatedDeliveryDate', 'deliveryDate'
+    ];
+    
+    const dataToUpdate = {};
+    for (const field of validFields) {
+      if (updatedData.hasOwnProperty(field)) {
+        dataToUpdate[field] = updatedData[field];
+      }
+    }
+    
+    // Map serviceStatus to status if provided
+    if (updatedData.serviceStatus) {
+      dataToUpdate.status = updatedData.serviceStatus;
+    }
+    
+    // Update the service in the database
+    const updatedService = await prisma.service.update({
+      where: { id },
+      data: dataToUpdate,
+      include: {
+        hotel: true,
+        repartidor: true
+      }
+    });
+    
+    // Log the update
+    await prisma.auditLog.create({
+      data: {
+        action: 'SERVICE_ROUTE_UPDATE',
+        entity: 'service',
+        entityId: id,
+        details: `Servicio actualizado en ruta ${routeId}, hotel índice ${hotelIndex}`,
+        userId: req.user.id,
+        serviceId: id
+      }
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Servicio actualizado en ruta exitosamente',
+      data: {
+        service: updatedService,
+        routeId,
+        hotelIndex
+      }
+    });
+  } catch (error) {
+    console.error('Error updating service in route:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al actualizar servicio en ruta',
+      error: error.message
+    });
+  }
+};
+
 // Calculate service price
 exports.calculatePrice = async (req, res) => {
   try {

@@ -109,6 +109,14 @@ router.put(
   serviceController.registerPickup
 );
 
+// Update service in route
+router.put(
+  '/:id/route-update',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['REPARTIDOR', 'ADMIN']),
+  serviceController.updateServiceInRoute
+);
+
 // Upload service photos
 router.post(
   '/:id/photos',
