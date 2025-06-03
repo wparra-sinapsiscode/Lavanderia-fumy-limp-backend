@@ -55,6 +55,10 @@ exports.createService = async (req, res) => {
       }
     }
     
+    // Calculate estimated pickup date (2 hours from now)
+    const estimatedPickupDate = new Date();
+    estimatedPickupDate.setHours(estimatedPickupDate.getHours() + 2);
+    
     // Create service
     const service = await prisma.service.create({
       data: {
@@ -66,6 +70,7 @@ exports.createService = async (req, res) => {
         weight: weight ? parseFloat(weight) : null,
         priority: priority || 'NORMAL',
         status: 'PENDING_PICKUP',
+        estimatedPickupDate,
         expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
         specialInstructions,
         observations
@@ -125,34 +130,29 @@ exports.createHotelService = async (req, res) => {
       });
     }
     
-    // Check if repartidor exists
-    if (!repartidorId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Repartidor requerido para servicios de hotel'
+    // Check if repartidor exists (optional)
+    if (repartidorId) {
+      const repartidor = await prisma.user.findUnique({
+        where: {
+          id: repartidorId,
+          role: 'REPARTIDOR'
+        }
       });
-    }
-    
-    const repartidor = await prisma.user.findUnique({
-      where: {
-        id: repartidorId,
-        role: 'REPARTIDOR'
+      
+      if (!repartidor) {
+        return res.status(404).json({
+          success: false,
+          message: 'Repartidor no encontrado'
+        });
       }
-    });
-    
-    if (!repartidor) {
-      return res.status(404).json({
-        success: false,
-        message: 'Repartidor no encontrado'
-      });
-    }
-    
-    // Check if repartidor zone matches hotel zone
-    if (repartidor.zone !== hotel.zone) {
-      return res.status(400).json({
-        success: false,
-        message: 'El repartidor debe estar asignado a la misma zona que el hotel'
-      });
+      
+      // Check if repartidor zone matches hotel zone
+      if (repartidor.zone !== hotel.zone) {
+        return res.status(400).json({
+          success: false,
+          message: 'El repartidor debe estar asignado a la misma zona que el hotel'
+        });
+      }
     }
     
     // Validar observaciones y número de habitación
@@ -173,16 +173,21 @@ exports.createHotelService = async (req, res) => {
     // Use hotel's contact person as the guest name for hotel services
     const guestName = hotel.contactPerson || 'Servicio de Hotel';
     
+    // Calculate estimated pickup date (2 hours from now)
+    const estimatedPickupDate = new Date();
+    estimatedPickupDate.setHours(estimatedPickupDate.getHours() + 2);
+    
     // Create service
     const service = await prisma.service.create({
       data: {
         hotelId,
         guestName,
         roomNumber,  // Ahora usamos el número de habitación proporcionado
-        repartidorId,
+        repartidorId: repartidorId || null,
         bagCount: parseInt(bagCount, 10) || 1,
         priority: priority || 'NORMAL',
         status: 'PENDING_PICKUP',
+        estimatedPickupDate,
         expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
         specialInstructions,
         observations,
