@@ -31,15 +31,20 @@ const storage = multer.diskStorage({
     if (file.fieldname === 'signature') {
       folder = path.join(uploadsDir, 'signatures');
     } else if (file.fieldname === 'photos' || file.fieldname === 'photo') {
-      folder = path.join(uploadsDir, 'services');
-      
-      // Create service-specific folder if we have serviceId
-      if (req.params.serviceId) {
-        const serviceDir = path.join(folder, req.params.serviceId);
-        if (!fs.existsSync(serviceDir)) {
-          fs.mkdirSync(serviceDir, { recursive: true });
+      // Check if this is for labeling (rótulos) or general service photos
+      if (req.body.type === 'labeling') {
+        folder = path.join(uploadsDir, 'labels');
+      } else {
+        folder = path.join(uploadsDir, 'services');
+        
+        // Create service-specific folder if we have serviceId
+        if (req.params.serviceId) {
+          const serviceDir = path.join(folder, req.params.serviceId);
+          if (!fs.existsSync(serviceDir)) {
+            fs.mkdirSync(serviceDir, { recursive: true });
+          }
+          folder = serviceDir;
         }
-        folder = serviceDir;
       }
     } else if (file.fieldname === 'labelPhoto') {
       folder = path.join(uploadsDir, 'labels');

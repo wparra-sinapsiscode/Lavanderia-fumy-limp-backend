@@ -243,7 +243,12 @@ exports.getAllServices = async (req, res) => {
     const where = {};
     
     if (status) {
-      where.status = status;
+      // Handle single status or array of statuses
+      if (Array.isArray(status)) {
+        where.status = { in: status };
+      } else {
+        where.status = status;
+      }
     }
     
     if (hotelId) {
