@@ -6,9 +6,9 @@
 const VALID_STATUS_TRANSITIONS = {
   'PENDING_PICKUP': ['ASSIGNED_TO_ROUTE', 'PICKED_UP', 'CANCELLED'],
   'ASSIGNED_TO_ROUTE': ['PICKED_UP', 'CANCELLED'], // ✨ NUEVO estado
-  'PICKED_UP': ['LABELED', 'CANCELLED'],
-  'LABELED': ['IN_PROCESS', 'CANCELLED'],
-  'IN_PROCESS': ['PARTIAL_DELIVERY', 'COMPLETED', 'CANCELLED'],
+  'PICKED_UP': ['LABELED', 'IN_PROCESS', 'CANCELLED'], // ✨ Ambos disponibles desde PICKED_UP
+  'LABELED': ['IN_PROCESS', 'PARTIAL_DELIVERY', 'COMPLETED', 'CANCELLED'], // ✨ Puede ir directo a completado si ya está en proceso
+  'IN_PROCESS': ['LABELED', 'PARTIAL_DELIVERY', 'COMPLETED', 'CANCELLED'], // ✨ Puede hacer rotulado después
   'PARTIAL_DELIVERY': ['COMPLETED', 'CANCELLED'],
   'COMPLETED': [],
   'CANCELLED': []
@@ -17,8 +17,8 @@ const VALID_STATUS_TRANSITIONS = {
 // Status requirements
 const STATUS_REQUIREMENTS = {
   'PICKED_UP': ['weight', 'signature', 'photos', 'collectorName'],
-  'LABELED': ['bagLabels'],
-  'IN_PROCESS': [],
+  'LABELED': [], // Solo requiere que esté recogido
+  'IN_PROCESS': [], // Solo requiere que esté recogido (paralelo con rotulado)
   'PARTIAL_DELIVERY': ['partialDeliveryPercentage', 'deliveredBagCount', 'signature'],
   'COMPLETED': ['signature'],
   'CANCELLED': ['internalNotes']
@@ -130,7 +130,7 @@ const VALIDATION_RULES = {
   },
   service: {
     minBagCount: 1,
-    maxPhotos: 5,
+    maxPhotos: 40,
     minWeight: 0.1
   },
   partialDelivery: {

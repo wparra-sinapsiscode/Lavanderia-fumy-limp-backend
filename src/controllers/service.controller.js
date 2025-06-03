@@ -594,7 +594,7 @@ exports.updateServiceStatus = async (req, res) => {
     // Create audit log
     await prisma.auditLog.create({
       data: {
-        action: AUDIT_ACTIONS.SERVICE_STATUS_UPDATED,
+        action: AUDIT_ACTIONS.SERVICE_STATUS_CHANGED,
         entity: 'service',
         entityId: id,
         details: `Estado actualizado a ${status}${notes ? `: ${notes}` : ''}`,
@@ -923,6 +923,7 @@ exports.uploadPhotos = async (req, res) => {
   try {
     const { id } = req.params;
     const photoUrls = req.body.photoUrls || [];
+    const photoType = req.body.type || 'pickup'; // pickup, labeling, delivery
     
     if (!photoUrls || photoUrls.length === 0) {
       return res.status(400).json({
@@ -943,23 +944,44 @@ exports.uploadPhotos = async (req, res) => {
       });
     }
     
-    // Add new photos to existing ones
-    const updatedPhotos = [...(existingService.photos || []), ...photoUrls];
+    // Determine which field to update based on type
+    let updateData = {};
+    
+    switch (photoType) {
+      case 'pickup':
+        const updatedPhotos = [...(existingService.photos || []), ...photoUrls];
+        updateData.photos = updatedPhotos;
+        break;
+      
+      case 'labeling':
+        const updatedLabelingPhotos = [...(existingService.labelingPhotos || []), ...photoUrls];
+        updateData.labelingPhotos = updatedLabelingPhotos;
+        break;
+      
+      case 'delivery':
+        const updatedDeliveryPhotos = [...(existingService.deliveryPhotos || []), ...photoUrls];
+        updateData.deliveryPhotos = updatedDeliveryPhotos;
+        break;
+      
+      default:
+        // Default to regular photos
+        const defaultPhotos = [...(existingService.photos || []), ...photoUrls];
+        updateData.photos = defaultPhotos;
+    }
     
     // Update service with new photos
     const updatedService = await prisma.service.update({
       where: { id },
-      data: {
-        photos: updatedPhotos
-      }
+      data: updateData
     });
     
     return res.status(200).json({
       success: true,
-      message: 'Fotos subidas exitosamente',
+      message: `Fotos de ${photoType} subidas exitosamente`,
       data: {
         photos: photoUrls,
-        totalPhotos: updatedPhotos.length
+        type: photoType,
+        totalPhotos: photoUrls.length
       }
     });
   } catch (error) {

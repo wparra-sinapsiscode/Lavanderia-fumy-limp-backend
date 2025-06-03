@@ -88,7 +88,7 @@ const upload = multer({
  * Middleware for handling service photo uploads (multiple files)
  */
 exports.uploadServicePhotos = (req, res, next) => {
-  const uploadHandler = upload.array('photos', 5); // Maximum 5 photos per request
+  const uploadHandler = upload.array('photos', 40); // Maximum 40 photos per request
   
   uploadHandler(req, res, (err) => {
     if (err instanceof multer.MulterError) {
