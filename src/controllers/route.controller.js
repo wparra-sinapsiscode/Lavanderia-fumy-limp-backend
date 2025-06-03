@@ -148,17 +148,28 @@ exports.getRoutes = async (req, res) => {
     }
 
     if (date) {
-      const queryDate = new Date(date);
+      // Crear fecha específicamente para zona horaria de Lima, Perú (UTC-5)
+      const dateStr = date.includes('T') ? date.split('T')[0] : date; // Extraer solo la fecha YYYY-MM-DD
+      const limaOffset = -5 * 60; // Lima está UTC-5 (en minutos)
+      
+      // Crear fechas en zona horaria de Lima
+      const startDate = new Date(`${dateStr}T00:00:00-05:00`);
+      const endDate = new Date(`${dateStr}T23:59:59.999-05:00`);
+      
       where.date = {
-        gte: new Date(queryDate.setHours(0, 0, 0, 0)),
-        lte: new Date(queryDate.setHours(23, 59, 59, 999))
+        gte: startDate,
+        lte: endDate
       };
     }
 
     if (startDate && endDate) {
+      // Manejar rango de fechas también en zona horaria de Lima
+      const startDateStr = startDate.includes('T') ? startDate.split('T')[0] : startDate;
+      const endDateStr = endDate.includes('T') ? endDate.split('T')[0] : endDate;
+      
       where.date = {
-        gte: new Date(new Date(startDate).setHours(0, 0, 0, 0)),
-        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999))
+        gte: new Date(`${startDateStr}T00:00:00-05:00`),
+        lte: new Date(`${endDateStr}T23:59:59.999-05:00`)
       };
     }
 
@@ -1187,9 +1198,10 @@ exports.deleteRoutesByDate = async (req, res) => {
       });
     }
 
-    // Crear rango de fecha (todo el día)
-    const startDate = new Date(new Date(date).setHours(0, 0, 0, 0));
-    const endDate = new Date(new Date(date).setHours(23, 59, 59, 999));
+    // Crear rango de fecha en zona horaria de Lima, Perú (UTC-5)
+    const dateStr = date.includes('T') ? date.split('T')[0] : date;
+    const startDate = new Date(`${dateStr}T00:00:00-05:00`);
+    const endDate = new Date(`${dateStr}T23:59:59.999-05:00`);
 
     // Encontrar rutas para la fecha especificada
     const routesToDelete = await prisma.route.findMany({
@@ -1495,8 +1507,8 @@ exports.generateRecommendedRoute = async (req, res) => {
           where: {
             status: 'PENDING_PICKUP',
             estimatedPickupDate: {
-              gte: new Date(new Date(routeDate).setHours(0, 0, 0, 0)),
-              lte: new Date(new Date(routeDate).setHours(23, 59, 59, 999))
+              gte: new Date(`${routeDate}T00:00:00-05:00`),
+              lte: new Date(`${routeDate}T23:59:59.999-05:00`)
             }
           },
           include: {
@@ -1636,8 +1648,8 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
     whereService.OR.push({
       status: 'PENDING_PICKUP',
       estimatedPickupDate: {
-        gte: new Date(new Date(date).setHours(0, 0, 0, 0)),
-        lte: new Date(new Date(date).setHours(23, 59, 59, 999))
+        gte: new Date(`${date}T00:00:00-05:00`),
+        lte: new Date(`${date}T23:59:59.999-05:00`)
       }
     });
   }
@@ -1647,8 +1659,8 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
     whereService.OR.push({
       status: 'IN_PROCESS',
       estimatedDeliveryDate: {
-        gte: new Date(new Date(date).setHours(0, 0, 0, 0)),
-        lte: new Date(new Date(date).setHours(23, 59, 59, 999))
+        gte: new Date(`${date}T00:00:00-05:00`),
+        lte: new Date(`${date}T23:59:59.999-05:00`)
       }
     });
   }

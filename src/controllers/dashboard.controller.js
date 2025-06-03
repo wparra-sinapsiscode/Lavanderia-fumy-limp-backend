@@ -14,12 +14,14 @@ exports.getAdminMetrics = async (req, res) => {
     // Get time period from query
     const { timePeriod = 'month' } = req.query;
     
-    // Get date range for metrics
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Get date range for metrics en zona horaria de Lima, Perú (UTC-5)
+    const todayStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const today = new Date(`${todayStr}T00:00:00-05:00`);
     
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowDate = new Date(today);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+    const tomorrow = new Date(`${tomorrowStr}T00:00:00-05:00`);
     
     // Calculate date ranges based on time period
     let startDate;
@@ -305,12 +307,14 @@ exports.getRepartidorMetrics = async (req, res) => {
   try {
     const { zone } = req.user;
     
-    // Get date range for metrics
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Get date range for metrics en zona horaria de Lima, Perú (UTC-5)
+    const todayStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const today = new Date(`${todayStr}T00:00:00-05:00`);
     
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowDate = new Date(today);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+    const tomorrow = new Date(`${tomorrowStr}T00:00:00-05:00`);
     
     const weekStart = new Date(today);
     weekStart.setDate(weekStart.getDate() - weekStart.getDay());
@@ -510,12 +514,14 @@ exports.getRepartidorMetrics = async (req, res) => {
  */
 exports.getFinancialMetrics = async (req, res) => {
   try {
-    // Get date range for metrics
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Get date range for metrics en zona horaria de Lima, Perú (UTC-5)
+    const todayStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const today = new Date(`${todayStr}T00:00:00-05:00`);
     
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowDate = new Date(today);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+    const tomorrow = new Date(`${tomorrowStr}T00:00:00-05:00`);
     
     const weekStart = new Date(today);
     weekStart.setDate(weekStart.getDate() - weekStart.getDay());
@@ -715,9 +721,9 @@ exports.getFinancialMetrics = async (req, res) => {
  */
 exports.getOperationalKPIs = async (req, res) => {
   try {
-    // Get date range for metrics
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Get date range for metrics en zona horaria de Lima, Perú (UTC-5)
+    const todayStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const today = new Date(`${todayStr}T00:00:00-05:00`);
     
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
     const yearStart = new Date(today.getFullYear(), 0, 1);
