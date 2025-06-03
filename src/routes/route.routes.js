@@ -109,6 +109,18 @@ router.post(
 );
 
 /**
+ * @route   POST /api/routes/generate-automatic
+ * @desc    Generate automatic routes for pickup services
+ * @access  Private - Admin only
+ */
+router.post(
+  '/generate-automatic',
+  authMiddleware.verifyToken,
+  authMiddleware.isAdmin,
+  routeController.generateAutomaticRoutes
+);
+
+/**
  * @route   POST /api/routes/:id/optimize
  * @desc    Optimize a route based on location coordinates
  * @access  Private - Authenticated users

@@ -250,36 +250,53 @@ exports.getRoutes = async (req, res) => {
       let totalPickups = 0;
       let totalDeliveries = 0;
       
-      // Format hotels/stops data
-      const hotels = route.stops?.map(stop => {
-        const pickups = [];
-        const deliveries = [];
+      // Group stops by hotel and format for frontend
+      const hotelMap = new Map();
+      
+      route.stops?.forEach(stop => {
+        const hotelId = stop.hotel.id;
+        
+        if (!hotelMap.has(hotelId)) {
+          hotelMap.set(hotelId, {
+            hotelId: stop.hotel.id,
+            hotelName: stop.hotel.name,
+            hotelAddress: stop.hotel.address,
+            hotelZone: stop.hotel.zone,
+            latitude: stop.hotel.latitude,
+            longitude: stop.hotel.longitude,
+            pickups: [],
+            deliveries: [],
+            services: [],
+            estimatedTime: stop.scheduledTime ? new Date(stop.scheduledTime).toLocaleTimeString('es-PE') : null,
+            completed: false,
+            timeSpent: 0
+          });
+        }
+        
+        const hotel = hotelMap.get(hotelId);
         
         if (stop.service) {
+          hotel.services.push(stop.service);
+          
           if (isPickupService(stop.service)) {
-            pickups.push(stop.service);
+            hotel.pickups.push(stop.service);
             totalPickups++;
           } else if (isDeliveryService(stop.service)) {
-            deliveries.push(stop.service);
+            hotel.deliveries.push(stop.service);
             totalDeliveries++;
           }
         }
         
-        return {
-          hotelId: stop.hotel.id,
-          hotelName: stop.hotel.name,
-          hotelAddress: stop.hotel.address,
-          hotelZone: stop.hotel.zone,
-          latitude: stop.hotel.latitude,
-          longitude: stop.hotel.longitude,
-          pickups,
-          deliveries,
-          services: stop.service ? [stop.service] : [],
-          estimatedTime: stop.scheduledTime ? new Date(stop.scheduledTime).toLocaleTimeString('es-PE') : null,
-          completed: stop.status === 'COMPLETED',
-          timeSpent: 0
-        };
-      }) || [];
+        // Hotel is completed if all its stops are completed
+        if (stop.status === 'COMPLETED') {
+          // Check if all stops for this hotel are completed
+          const hotelStops = route.stops.filter(s => s.hotel.id === hotelId);
+          const completedStops = hotelStops.filter(s => s.status === 'COMPLETED');
+          hotel.completed = hotelStops.length === completedStops.length;
+        }
+      });
+      
+      const hotels = Array.from(hotelMap.values());
       
       // Calculate estimated duration (45 mins per hotel)
       const estimatedDuration = hotels.length * 45;
@@ -405,36 +422,53 @@ exports.getRouteById = async (req, res) => {
     let totalPickups = 0;
     let totalDeliveries = 0;
     
-    // Format hotels/stops data
-    const hotels = route.stops.map(stop => {
-      const pickups = [];
-      const deliveries = [];
+    // Group stops by hotel and format for frontend
+    const hotelMap = new Map();
+    
+    route.stops.forEach(stop => {
+      const hotelId = stop.hotel.id;
+      
+      if (!hotelMap.has(hotelId)) {
+        hotelMap.set(hotelId, {
+          hotelId: stop.hotel.id,
+          hotelName: stop.hotel.name,
+          hotelAddress: stop.hotel.address,
+          hotelZone: stop.hotel.zone,
+          latitude: stop.hotel.latitude,
+          longitude: stop.hotel.longitude,
+          pickups: [],
+          deliveries: [],
+          services: [],
+          estimatedTime: stop.scheduledTime ? new Date(stop.scheduledTime).toLocaleTimeString('es-PE') : null,
+          completed: false,
+          timeSpent: 0
+        });
+      }
+      
+      const hotel = hotelMap.get(hotelId);
       
       if (stop.service) {
+        hotel.services.push(stop.service);
+        
         if (isPickupService(stop.service)) {
-          pickups.push(stop.service);
+          hotel.pickups.push(stop.service);
           totalPickups++;
         } else if (isDeliveryService(stop.service)) {
-          deliveries.push(stop.service);
+          hotel.deliveries.push(stop.service);
           totalDeliveries++;
         }
       }
       
-      return {
-        hotelId: stop.hotel.id,
-        hotelName: stop.hotel.name,
-        hotelAddress: stop.hotel.address,
-        hotelZone: stop.hotel.zone,
-        latitude: stop.hotel.latitude,
-        longitude: stop.hotel.longitude,
-        pickups,
-        deliveries,
-        services: stop.service ? [stop.service] : [],
-        estimatedTime: stop.scheduledTime ? new Date(stop.scheduledTime).toLocaleTimeString('es-PE') : null,
-        completed: stop.status === 'COMPLETED',
-        timeSpent: 0
-      };
+      // Hotel is completed if all its stops are completed
+      if (stop.status === 'COMPLETED') {
+        // Check if all stops for this hotel are completed
+        const hotelStops = route.stops.filter(s => s.hotel.id === hotelId);
+        const completedStops = hotelStops.filter(s => s.status === 'COMPLETED');
+        hotel.completed = hotelStops.length === completedStops.length;
+      }
     });
+    
+    const hotels = Array.from(hotelMap.values());
     
     // Calculate estimated duration (45 mins per hotel)
     const estimatedDuration = hotels.length * 45;
@@ -1433,18 +1467,62 @@ exports.generateRecommendedRoute = async (req, res) => {
           });
         }
         
-        // Generate routes for each repartidor
+        // Generate routes by zone instead of by repartidor
         const allRoutes = [];
         
-        for (const repartidor of repartidores) {
+        // Get services for the date
+        const services = await prisma.service.findMany({
+          where: {
+            status: 'PENDING_PICKUP',
+            estimatedPickupDate: {
+              gte: new Date(new Date(routeDate).setHours(0, 0, 0, 0)),
+              lte: new Date(new Date(routeDate).setHours(23, 59, 59, 999))
+            }
+          },
+          include: {
+            hotel: true
+          },
+          orderBy: [
+            { priority: 'desc' },
+            { createdAt: 'asc' }
+          ]
+        });
+
+        if (services.length === 0) {
+          return res.status(200).json({
+            success: true,
+            message: 'No hay servicios pendientes para la fecha especificada',
+            data: []
+          });
+        }
+
+        // Group services by zone
+        const servicesByZone = {};
+        services.forEach(service => {
+          const serviceZone = service.hotel.zone;
+          if (!servicesByZone[serviceZone]) {
+            servicesByZone[serviceZone] = [];
+          }
+          servicesByZone[serviceZone].push(service);
+        });
+
+        // Generate one route per zone
+        for (const [serviceZone, zoneServices] of Object.entries(servicesByZone)) {
+          const zoneRepartidores = repartidores.filter(r => r.zone === serviceZone);
+          
+          if (zoneRepartidores.length === 0) {
+            console.log(`No hay repartidores disponibles para la zona ${serviceZone}`);
+            continue;
+          }
+
           try {
-            const result = await generateRouteForRepartidor(repartidor.id, routeDate, zone, type);
+            const result = await generateRouteForZone(zoneRepartidores[0].id, routeDate, serviceZone, zoneServices);
             if (result) {
               allRoutes.push(result);
             }
           } catch (err) {
-            console.error(`Error generando ruta para repartidor ${repartidor.id}:`, err);
-            // Continue with next repartidor
+            console.error(`Error generando ruta para zona ${serviceZone}:`, err);
+            // Continue with next zone
           }
         }
         
@@ -1777,4 +1855,406 @@ function formatRouteForFrontend(routeData) {
     type: stats.totalPickups > stats.totalDeliveries ? 'pickup' : 
           stats.totalDeliveries > stats.totalPickups ? 'delivery' : 'mixed'
   };
+}
+
+/**
+ * Generate automatic routes for pickup services only
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @returns {Object} Response with generated routes
+ */
+exports.generateAutomaticRoutes = async (req, res) => {
+  try {
+    const { date, zones } = req.body;
+    
+    // Validar fecha
+    if (!date) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'La fecha es requerida' 
+      });
+    }
+
+    // Si no se especifican zonas, usar todas
+    const targetZones = zones && zones.length > 0 ? zones : ['NORTE', 'SUR', 'ESTE', 'OESTE', 'CENTRO'];
+
+    // Obtener solo servicios pendientes de recogida
+    const services = await prisma.service.findMany({
+      where: {
+        status: 'PENDING_PICKUP',
+        hotel: {
+          zone: { in: targetZones }
+        }
+      },
+      include: {
+        hotel: {
+          select: {
+            id: true,
+            name: true,
+            address: true,
+            zone: true,
+            latitude: true,
+            longitude: true
+          }
+        }
+      },
+      orderBy: [
+        { priority: 'desc' }, // ALTA primero
+        { createdAt: 'asc' }  // Más antiguos primero
+      ]
+    });
+
+    if (services.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No hay servicios pendientes de recogida para las zonas especificadas',
+        data: []
+      });
+    }
+
+    // Agrupar servicios por zona
+    const servicesByZone = {};
+    
+    services.forEach(service => {
+      const zone = service.hotel.zone;
+      if (!servicesByZone[zone]) {
+        servicesByZone[zone] = [];
+      }
+      servicesByZone[zone].push(service);
+    });
+
+    // Obtener repartidores disponibles por zona
+    const repartidores = await prisma.user.findMany({
+      where: {
+        role: 'REPARTIDOR',
+        active: true,
+        zone: { in: Object.keys(servicesByZone) }
+      }
+    });
+
+    if (repartidores.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No hay repartidores disponibles para las zonas con servicios pendientes',
+        data: []
+      });
+    }
+
+    // Agrupar repartidores por zona
+    const repartidoresByZone = {};
+    repartidores.forEach(rep => {
+      if (!repartidoresByZone[rep.zone]) {
+        repartidoresByZone[rep.zone] = [];
+      }
+      repartidoresByZone[rep.zone].push(rep);
+    });
+
+    // Generar UNA ruta por cada zona
+    const generatedRoutes = [];
+    
+    for (const [zone, zoneServices] of Object.entries(servicesByZone)) {
+      const zoneRepartidores = repartidoresByZone[zone] || [];
+      
+      if (zoneRepartidores.length === 0) {
+        console.log(`No hay repartidores disponibles para la zona ${zone}`);
+        continue;
+      }
+
+      // Agrupar servicios por hotel
+      const servicesByHotel = {};
+      
+      zoneServices.forEach(service => {
+        const hotelId = service.hotel.id;
+        if (!servicesByHotel[hotelId]) {
+          servicesByHotel[hotelId] = {
+            hotel: service.hotel,
+            services: []
+          };
+        }
+        servicesByHotel[hotelId].services.push(service);
+      });
+
+      // Convertir a array de hoteles con servicios
+      const hotelsWithServices = Object.values(servicesByHotel);
+      
+      // Ordenar hoteles por prioridad y proximidad
+      const sortedHotels = sortHotelsByPriorityAndProximity(hotelsWithServices);
+      
+      // Asignar el primer repartidor disponible de la zona
+      const repartidor = zoneRepartidores[0];
+      
+      // Calcular estadísticas de la ruta
+      const totalServices = zoneServices.length;
+      const totalBags = zoneServices.reduce((sum, service) => sum + (service.bagCount || 0), 0);
+      const totalHotels = sortedHotels.length;
+      
+      // Crear UNA SOLA ruta para toda la zona
+      const routeName = `Ruta ${zone} - Recogida ${new Date(date).toLocaleDateString('es-PE')}`;
+      
+      const route = await prisma.route.create({
+        data: {
+          name: routeName,
+          date: new Date(date),
+          repartidorId: repartidor.id,
+          status: 'PLANNED',
+          notes: `Zona: ${zone} | ${totalHotels} hotel(es) | ${totalServices} servicio(s) | ${totalBags} bolsa(s)`,
+          stops: {
+            create: (() => {
+              const stops = [];
+              let stopOrder = 1;
+              
+              sortedHotels.forEach((hotelData, hotelIndex) => {
+                const hotelServices = hotelData.services;
+                
+                // Create one stop per service
+                hotelServices.forEach((service) => {
+                  stops.push({
+                    hotelId: hotelData.hotel.id,
+                    serviceId: service.id, // ✅ Associate each service
+                    order: stopOrder++,
+                    status: 'PENDING',
+                    scheduledTime: calculateScheduledTimeWithDuration(date, hotelIndex, sortedHotels),
+                    notes: `${service.guestName} - Hab. ${service.roomNumber} | ${service.bagCount} bolsa(s) | ${service.priority}`
+                  });
+                });
+              });
+              
+              return stops;
+            })()
+          }
+        },
+        include: {
+          stops: {
+            include: {
+              hotel: true,
+              service: true
+            }
+          },
+          repartidor: true
+        }
+      });
+      
+      generatedRoutes.push(route);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Se generaron ${generatedRoutes.length} rutas de recogida (una por zona)`,
+      data: generatedRoutes,
+      summary: {
+        totalRoutes: generatedRoutes.length,
+        totalServices: services.length,
+        zones: Object.keys(servicesByZone),
+        routesByZone: Object.entries(servicesByZone).map(([zone, services]) => ({
+          zone,
+          services: services.length,
+          bags: services.reduce((sum, s) => sum + (s.bagCount || 0), 0)
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error('Error generating automatic routes:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al generar rutas automáticas',
+      error: error.message
+    });
+  }
+};
+
+// Función auxiliar para ordenar hoteles por prioridad y proximidad
+function sortHotelsByPriorityAndProximity(hotels) {
+  // Primero: hoteles con servicios de alta prioridad
+  const hotelsWithHighPriority = hotels.filter(h => 
+    h.services.some(s => s.priority === 'ALTA')
+  );
+  
+  // Segundo: hoteles con servicios de prioridad media
+  const hotelsWithMediumPriority = hotels.filter(h => 
+    h.services.some(s => s.priority === 'MEDIA') && 
+    !h.services.some(s => s.priority === 'ALTA')
+  );
+  
+  // Tercero: hoteles con servicios de prioridad normal
+  const hotelsWithNormalPriority = hotels.filter(h => 
+    h.services.every(s => s.priority === 'NORMAL')
+  );
+  
+  // Ordenar cada grupo por proximidad (si tienen coordenadas)
+  const sortByProximity = (hotelGroup) => {
+    const withCoords = hotelGroup.filter(h => h.hotel.latitude && h.hotel.longitude);
+    const withoutCoords = hotelGroup.filter(h => !h.hotel.latitude || !h.hotel.longitude);
+    
+    // Ordenar por coordenadas (algoritmo simple)
+    withCoords.sort((a, b) => {
+      const distA = Math.abs(a.hotel.latitude) + Math.abs(a.hotel.longitude);
+      const distB = Math.abs(b.hotel.latitude) + Math.abs(b.hotel.longitude);
+      return distA - distB;
+    });
+    
+    return [...withCoords, ...withoutCoords];
+  };
+  
+  return [
+    ...sortByProximity(hotelsWithHighPriority),
+    ...sortByProximity(hotelsWithMediumPriority),
+    ...sortByProximity(hotelsWithNormalPriority)
+  ];
+}
+
+// Función para calcular tiempo estimado por hotel
+function calculateTimeForHotel(services) {
+  const TIME_CONSTANTS = {
+    BASE_HOTEL: 15,        // Tiempo base por hotel (check-in, estacionamiento)
+    BASE_SERVICE: 10,      // Tiempo base por servicio/habitación
+    PER_BAG: 1             // Tiempo adicional por bolsa
+  };
+  
+  let totalTime = TIME_CONSTANTS.BASE_HOTEL;
+  
+  services.forEach(service => {
+    totalTime += TIME_CONSTANTS.BASE_SERVICE + ((service.bagCount || 0) * TIME_CONSTANTS.PER_BAG);
+  });
+  
+  return Math.round(totalTime);
+}
+
+// Función para calcular hora programada con duración
+function calculateScheduledTimeWithDuration(date, index, allHotels) {
+  const baseTime = new Date(date);
+  baseTime.setHours(8, 0, 0, 0); // Empezar a las 8 AM
+  
+  // Calcular tiempo acumulado de hoteles anteriores
+  let accumulatedMinutes = 0;
+  
+  for (let i = 0; i < index; i++) {
+    const hotelServices = allHotels[i].services;
+    const hotelTime = calculateTimeForHotel(hotelServices);
+    accumulatedMinutes += hotelTime;
+    
+    // Agregar tiempo de traslado entre hoteles (10 minutos promedio)
+    if (i > 0) {
+      accumulatedMinutes += 10;
+    }
+  }
+  
+  baseTime.setMinutes(baseTime.getMinutes() + accumulatedMinutes);
+  return baseTime;
+}
+
+// Función auxiliar para ordenar hoteles por proximidad (mantenida para compatibilidad)
+function sortHotelsByProximity(hotels) {
+  return sortHotelsByPriorityAndProximity(hotels);
+}
+
+// Función para calcular hora programada (mantenida para compatibilidad)
+function calculateScheduledTime(date, index) {
+  const baseTime = new Date(date);
+  baseTime.setHours(8, 0, 0, 0); // Empezar a las 8 AM
+  
+  // Agregar 45 minutos por cada parada anterior
+  const minutes = index * 45;
+  baseTime.setMinutes(baseTime.getMinutes() + minutes);
+  
+  return baseTime;
+}
+
+/**
+ * Generate a route for a specific zone with all its services
+ * @param {string} repartidorId - ID of the repartidor
+ * @param {string} date - Date for the route (YYYY-MM-DD) 
+ * @param {string} zone - Zone name
+ * @param {Array} services - Services for this zone
+ * @returns {Object} Generated route with stops
+ */
+async function generateRouteForZone(repartidorId, date, zone, services) {
+  // Group services by hotel
+  const servicesByHotel = {};
+  
+  services.forEach(service => {
+    const hotelId = service.hotel.id;
+    if (!servicesByHotel[hotelId]) {
+      servicesByHotel[hotelId] = {
+        hotel: service.hotel,
+        services: []
+      };
+    }
+    servicesByHotel[hotelId].services.push(service);
+  });
+
+  // Convert to array and sort by priority and proximity
+  const hotelsWithServices = Object.values(servicesByHotel);
+  const sortedHotels = sortHotelsByPriorityAndProximity(hotelsWithServices);
+
+  // Calculate route statistics
+  const totalServices = services.length;
+  const totalBags = services.reduce((sum, service) => sum + (service.bagCount || 0), 0);
+  const totalHotels = sortedHotels.length;
+
+  // Create the route
+  const routeName = `Ruta ${zone} - Recogida ${new Date(date).toLocaleDateString('es-PE')}`;
+  
+  const result = await prisma.$transaction(async (tx) => {
+    // Create main route
+    const route = await tx.route.create({
+      data: {
+        name: routeName,
+        date: new Date(date),
+        repartidorId,
+        status: 'PLANNED',
+        notes: `Zona: ${zone} | ${totalHotels} hotel(es) | ${totalServices} servicio(s) | ${totalBags} bolsa(s)`
+      },
+      include: {
+        repartidor: true
+      }
+    });
+
+    // Create route stops - one stop per service for proper association
+    const routeStops = [];
+    let stopOrder = 1;
+    
+    for (let hotelIndex = 0; hotelIndex < sortedHotels.length; hotelIndex++) {
+      const hotelData = sortedHotels[hotelIndex];
+      const hotelServices = hotelData.services;
+      
+      // Create one stop per service to properly associate services with stops
+      for (let serviceIndex = 0; serviceIndex < hotelServices.length; serviceIndex++) {
+        const service = hotelServices[serviceIndex];
+        const estimatedTime = calculateTimeForHotel([service]); // Time for this specific service
+        
+        const routeStop = await tx.routeStop.create({
+          data: {
+            routeId: route.id,
+            hotelId: hotelData.hotel.id,
+            serviceId: service.id, // ✅ AHORA SÍ ASOCIA EL SERVICIO
+            order: stopOrder++,
+            status: 'PENDING',
+            scheduledTime: calculateScheduledTimeWithDuration(date, hotelIndex, sortedHotels),
+            notes: `${service.guestName} - Hab. ${service.roomNumber} | ${service.bagCount} bolsa(s) | ${service.priority}`
+          },
+          include: {
+            hotel: true,
+            service: true
+          }
+        });
+        
+        routeStops.push(routeStop);
+      }
+    }
+
+    return { 
+      route, 
+      routeStops, 
+      stats: {
+        totalPickups: totalServices,
+        totalDeliveries: 0,
+        serviceCount: totalServices,
+        totalBags,
+        totalHotels
+      }
+    };
+  });
+
+  return result;
 }
