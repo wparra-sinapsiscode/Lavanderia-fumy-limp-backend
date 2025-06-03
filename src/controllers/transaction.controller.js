@@ -612,15 +612,15 @@ exports.getDailyReport = async (req, res) => {
     let startDate, endDate;
     
     if (date) {
-      // Usar fecha específica en zona horaria de Lima, Perú (UTC-5)
+      // Usar fecha específica con comparación exacta
       const dateStr = date.includes('T') ? date.split('T')[0] : date;
-      startDate = new Date(`${dateStr}T00:00:00-05:00`);
-      endDate = new Date(`${dateStr}T23:59:59.999-05:00`);
+      startDate = new Date(dateStr + 'T00:00:00.000Z');
+      endDate = new Date(dateStr + 'T24:00:00.000Z');
     } else {
-      // Usar fecha de hoy en zona horaria de Lima, Perú (UTC-5)
+      // Usar fecha de hoy con comparación exacta
       const todayStr = new Date().toISOString().split('T')[0];
-      startDate = new Date(`${todayStr}T00:00:00-05:00`);
-      endDate = new Date(`${todayStr}T23:59:59.999-05:00`);
+      startDate = new Date(todayStr + 'T00:00:00.000Z');
+      endDate = new Date(todayStr + 'T24:00:00.000Z');
     }
     
     // Get all transactions for the day

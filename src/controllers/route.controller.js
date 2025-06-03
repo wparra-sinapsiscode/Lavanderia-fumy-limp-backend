@@ -148,28 +148,23 @@ exports.getRoutes = async (req, res) => {
     }
 
     if (date) {
-      // Crear fecha específicamente para zona horaria de Lima, Perú (UTC-5)
-      const dateStr = date.includes('T') ? date.split('T')[0] : date; // Extraer solo la fecha YYYY-MM-DD
-      const limaOffset = -5 * 60; // Lima está UTC-5 (en minutos)
-      
-      // Crear fechas en zona horaria de Lima
-      const startDate = new Date(`${dateStr}T00:00:00-05:00`);
-      const endDate = new Date(`${dateStr}T23:59:59.999-05:00`);
+      // Usar comparación por fecha exacta sin depender de zona horaria del servidor
+      const targetDate = date.includes('T') ? date.split('T')[0] : date; // Extraer YYYY-MM-DD
       
       where.date = {
-        gte: startDate,
-        lte: endDate
+        gte: new Date(targetDate + 'T00:00:00.000Z'),
+        lt: new Date(targetDate + 'T24:00:00.000Z') // Equivale al día siguiente 00:00:00
       };
     }
 
     if (startDate && endDate) {
-      // Manejar rango de fechas también en zona horaria de Lima
+      // Manejar rango de fechas con comparación exacta
       const startDateStr = startDate.includes('T') ? startDate.split('T')[0] : startDate;
       const endDateStr = endDate.includes('T') ? endDate.split('T')[0] : endDate;
       
       where.date = {
-        gte: new Date(`${startDateStr}T00:00:00-05:00`),
-        lte: new Date(`${endDateStr}T23:59:59.999-05:00`)
+        gte: new Date(startDateStr + 'T00:00:00.000Z'),
+        lt: new Date(endDateStr + 'T24:00:00.000Z')
       };
     }
 
@@ -1198,17 +1193,17 @@ exports.deleteRoutesByDate = async (req, res) => {
       });
     }
 
-    // Crear rango de fecha en zona horaria de Lima, Perú (UTC-5)
+    // Crear rango de fecha con comparación exacta sin zona horaria
     const dateStr = date.includes('T') ? date.split('T')[0] : date;
-    const startDate = new Date(`${dateStr}T00:00:00-05:00`);
-    const endDate = new Date(`${dateStr}T23:59:59.999-05:00`);
+    const startDate = new Date(dateStr + 'T00:00:00.000Z');
+    const endDate = new Date(dateStr + 'T24:00:00.000Z');
 
     // Encontrar rutas para la fecha especificada
     const routesToDelete = await prisma.route.findMany({
       where: {
         date: {
           gte: startDate,
-          lte: endDate
+          lt: endDate
         }
       }
     });
@@ -1225,7 +1220,7 @@ exports.deleteRoutesByDate = async (req, res) => {
       where: {
         date: {
           gte: startDate,
-          lte: endDate
+          lt: endDate
         }
       }
     });
@@ -1507,8 +1502,8 @@ exports.generateRecommendedRoute = async (req, res) => {
           where: {
             status: 'PENDING_PICKUP',
             estimatedPickupDate: {
-              gte: new Date(`${routeDate}T00:00:00-05:00`),
-              lte: new Date(`${routeDate}T23:59:59.999-05:00`)
+              gte: new Date(routeDate + 'T00:00:00.000Z'),
+              lt: new Date(routeDate + 'T24:00:00.000Z')
             }
           },
           include: {
@@ -1648,8 +1643,8 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
     whereService.OR.push({
       status: 'PENDING_PICKUP',
       estimatedPickupDate: {
-        gte: new Date(`${date}T00:00:00-05:00`),
-        lte: new Date(`${date}T23:59:59.999-05:00`)
+        gte: new Date(date + 'T00:00:00.000Z'),
+        lt: new Date(date + 'T24:00:00.000Z')
       }
     });
   }
@@ -1659,8 +1654,8 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
     whereService.OR.push({
       status: 'IN_PROCESS',
       estimatedDeliveryDate: {
-        gte: new Date(`${date}T00:00:00-05:00`),
-        lte: new Date(`${date}T23:59:59.999-05:00`)
+        gte: new Date(date + 'T00:00:00.000Z'),
+        lt: new Date(date + 'T24:00:00.000Z')
       }
     });
   }
