@@ -6,9 +6,13 @@ const express = require('express');
 const router = express.Router();
 const bagLabelController = require('../controllers/bagLabel.controller');
 const { verifyToken, isAdmin } = require('../middleware/auth.middleware');
+const uploadMiddleware = require('../middleware/upload.middleware');
 
 // Apply authentication middleware to all routes
 router.use(verifyToken);
+
+// Create single bag label (for rotulado process)
+router.post('/single', uploadMiddleware.uploadBagLabelPhoto, bagLabelController.createSingleBagLabel);
 
 // Get a specific label by ID
 router.get('/:id', bagLabelController.getLabelById);

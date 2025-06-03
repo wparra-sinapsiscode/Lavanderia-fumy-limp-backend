@@ -21,6 +21,118 @@ const generateLabelCode = (hotelCode, serviceId, bagNumber) => {
 };
 
 /**
+ * Create a single bag label (for rotulado process)
+ * @route POST /api/bag-labels/single
+ * @access Private
+ */
+exports.createSingleBagLabel = async (req, res) => {
+  try {
+    const { 
+      serviceId, 
+      hotelId, 
+      bagNumber, 
+      label, 
+      registeredById, 
+      status, 
+      generatedAt 
+    } = req.body;
+
+    // Validate required fields
+    if (!serviceId || !hotelId || !bagNumber || !label || !registeredById) {
+      return res.status(400).json({
+        success: false,
+        message: 'Faltan campos requeridos: serviceId, hotelId, bagNumber, label, registeredById'
+      });
+    }
+
+    // Check if service exists
+    const service = await prisma.service.findUnique({
+      where: { id: serviceId },
+      include: { hotel: true }
+    });
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio no encontrado'
+      });
+    }
+
+    // Check if hotel exists
+    const hotel = await prisma.hotel.findUnique({
+      where: { id: hotelId }
+    });
+
+    if (!hotel) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hotel no encontrado'
+      });
+    }
+
+    // Check if user exists
+    const user = await prisma.user.findUnique({
+      where: { id: registeredById }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    // Handle photo upload if present
+    let photoPath = null;
+    if (req.file) {
+      // Photo was uploaded via multer middleware
+      photoPath = req.file.path;
+    }
+
+    // Create bag label
+    const bagLabel = await prisma.bagLabel.create({
+      data: {
+        serviceId,
+        hotelId,
+        bagNumber: parseInt(bagNumber),
+        label,
+        photo: photoPath || '',
+        registeredById,
+        status: status || 'LABELED',
+        generatedAt: generatedAt || 'LAVANDERIA',
+        timestamp: new Date(),
+        labeledAt: new Date()
+      }
+    });
+
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        action: AUDIT_ACTIONS.BAG_LABEL_CREATED,
+        entity: 'bagLabel',
+        entityId: bagLabel.id,
+        details: `Rótulo creado para bolsa ${bagNumber} del servicio ${service.guestName}`,
+        userId: registeredById,
+        bagLabelId: bagLabel.id
+      }
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Rótulo creado exitosamente',
+      data: bagLabel
+    });
+  } catch (error) {
+    console.error('Error creating single bag label:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al crear rótulo',
+      error: error.message
+    });
+  }
+};
+
+/**
  * Create labels for a service
  * @route POST /api/services/:serviceId/labels
  * @access Private

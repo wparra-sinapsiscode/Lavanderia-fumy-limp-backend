@@ -152,6 +152,36 @@ exports.uploadSinglePhoto = (fieldName) => {
 };
 
 /**
+ * Middleware for handling bag label photo upload
+ */
+exports.uploadBagLabelPhoto = (req, res, next) => {
+  const uploadHandler = upload.single('photo');
+  
+  uploadHandler(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      return res.status(400).json({
+        success: false,
+        message: `Error en la carga de la foto: ${err.message}`
+      });
+    } else if (err) {
+      return res.status(500).json({
+        success: false,
+        message: `Error en la carga de la foto: ${err.message}`
+      });
+    }
+    
+    // Process uploaded file
+    if (req.file) {
+      // Add URL to request body
+      const relativePath = req.file.path.replace(path.join(__dirname, '../..'), '');
+      req.body.photoUrl = relativePath.replace(/\\/g, '/');
+    }
+    
+    next();
+  });
+};
+
+/**
  * Middleware for handling signature upload
  */
 exports.uploadSignature = (req, res, next) => {
