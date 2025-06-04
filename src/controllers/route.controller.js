@@ -1996,8 +1996,12 @@ exports.generateAutomaticRoutes = async (req, res) => {
   try {
     const { date, zones, type = 'mixed' } = req.body;
     
+    console.log('🚀 INICIANDO GENERACIÓN DE RUTAS AUTOMÁTICAS');
+    console.log('📅 Parámetros recibidos:', { date, zones, type });
+    
     // Validar fecha
     if (!date) {
+      console.log('❌ Error: Fecha no proporcionada');
       return res.status(400).json({ 
         success: false, 
         message: 'La fecha es requerida' 
@@ -2014,6 +2018,7 @@ exports.generateAutomaticRoutes = async (req, res) => {
 
     // Si no se especifican zonas, usar todas
     const targetZones = zones && zones.length > 0 ? zones : ['NORTE', 'SUR', 'ESTE', 'OESTE', 'CENTRO'];
+    console.log('🎯 Zonas objetivo:', targetZones);
 
     // Construir consulta para obtener servicios según el tipo
     const whereService = {
@@ -2022,32 +2027,40 @@ exports.generateAutomaticRoutes = async (req, res) => {
         zone: { in: targetZones }
       }
     };
+    
+    console.log('🔍 Construyendo consulta para tipo:', type);
 
     // Incluir servicios de recogida si es pickup o mixed
     // SOLO servicios SIN repartidor asignado (fondo amarillo)
     if (type === 'pickup' || type === 'mixed') {
-      whereService.OR.push({
+      const pickupCondition = {
         status: 'PENDING_PICKUP',
         repartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
         estimatedPickupDate: {
           gte: new Date(date + 'T00:00:00.000Z'),
           lt: new Date(date + 'T24:00:00.000Z')
         }
-      });
+      };
+      whereService.OR.push(pickupCondition);
+      console.log('📋 Agregando condición para PICKUP:', pickupCondition);
     }
 
     // Incluir servicios de entrega si es delivery o mixed  
     // SOLO servicios SIN deliveryRepartidorId asignado (fondo amarillo)
     if (type === 'delivery' || type === 'mixed') {
-      whereService.OR.push({
+      const deliveryCondition = {
         status: 'IN_PROCESS',
         deliveryRepartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
         estimatedDeliveryDate: {
           gte: new Date(date + 'T00:00:00.000Z'),
           lt: new Date(date + 'T24:00:00.000Z')
         }
-      });
+      };
+      whereService.OR.push(deliveryCondition);
+      console.log('📦 Agregando condición para DELIVERY:', deliveryCondition);
     }
+
+    console.log('📊 Consulta final whereService:', JSON.stringify(whereService, null, 2));
 
     // Obtener servicios según el tipo especificado
     const services = await prisma.service.findMany({
@@ -2070,10 +2083,18 @@ exports.generateAutomaticRoutes = async (req, res) => {
       ]
     });
 
+    console.log(`📈 SERVICIOS ENCONTRADOS: ${services.length}`);
+    
+    // Log detallado de servicios encontrados
+    services.forEach((service, index) => {
+      console.log(`  ${index + 1}. ${service.hotel.name} (${service.hotel.zone}) - ${service.guestName} - Status: ${service.status} - RepartidorId: ${service.repartidorId} - DeliveryRepartidorId: ${service.deliveryRepartidorId}`);
+    });
+
     if (services.length === 0) {
       const serviceTypeMsg = type === 'pickup' ? 'recogida' : 
                            type === 'delivery' ? 'entrega' : 
                            'recogida y entrega';
+      console.log(`❌ NO HAY SERVICIOS: ${serviceTypeMsg} para zonas ${targetZones.join(', ')}`);
       return res.status(200).json({
         success: true,
         message: `No hay servicios pendientes de ${serviceTypeMsg} para las zonas especificadas`,
@@ -2092,6 +2113,11 @@ exports.generateAutomaticRoutes = async (req, res) => {
       servicesByZone[zone].push(service);
     });
 
+    console.log('🗺️ SERVICIOS AGRUPADOS POR ZONA:');
+    Object.entries(servicesByZone).forEach(([zone, zoneServices]) => {
+      console.log(`  📍 ${zone}: ${zoneServices.length} servicios`);
+    });
+
     // Obtener repartidores disponibles por zona
     const repartidores = await prisma.user.findMany({
       where: {
@@ -2101,7 +2127,13 @@ exports.generateAutomaticRoutes = async (req, res) => {
       }
     });
 
+    console.log(`👷 REPARTIDORES ENCONTRADOS: ${repartidores.length}`);
+    repartidores.forEach((rep, index) => {
+      console.log(`  ${index + 1}. ${rep.name} - Zona: ${rep.zone}`);
+    });
+
     if (repartidores.length === 0) {
+      console.log('❌ NO HAY REPARTIDORES disponibles para las zonas con servicios');
       return res.status(400).json({
         success: false,
         message: 'No hay repartidores disponibles para las zonas con servicios pendientes',
@@ -2133,13 +2165,19 @@ exports.generateAutomaticRoutes = async (req, res) => {
       const repartidor = zoneRepartidores[0];
 
       try {
+        console.log(`🔨 Generando ruta para zona ${zone} con repartidor ${repartidor.name}`);
+        console.log(`📊 Servicios en zona ${zone}:`, zoneServices.length);
+        
         // Usar la nueva función optimizada que agrupa por hotel y tipo
         const result = await generateOptimizedRouteForZone(repartidor.id, date, zone, zoneServices, type);
         if (result) {
+          console.log(`✅ Ruta generada exitosamente para zona ${zone}: ${result.route.name}`);
           generatedRoutes.push(result);
+        } else {
+          console.log(`⚠️ No se pudo generar ruta para zona ${zone}`);
         }
       } catch (err) {
-        console.error(`Error generando ruta optimizada para zona ${zone}:`, err);
+        console.error(`❌ Error generando ruta optimizada para zona ${zone}:`, err);
         // Continuar con la siguiente zona
       }
     }
@@ -2151,6 +2189,9 @@ exports.generateAutomaticRoutes = async (req, res) => {
     const routeTypeMsg = type === 'pickup' ? 'recogida' : 
                         type === 'delivery' ? 'entrega' : 
                         'mixtas (recogida y entrega)';
+
+    console.log(`🎉 RESULTADO FINAL: ${generatedRoutes.length} rutas ${routeTypeMsg} generadas`);
+    console.log(`📊 ESTADÍSTICAS: ${totalPickups} recojos, ${totalDeliveries} entregas`);
 
     return res.status(200).json({
       success: true,
@@ -2591,8 +2632,7 @@ async function generateOptimizedRouteForZone(repartidorId, date, zone, services,
           await tx.service.update({
             where: { id: service.id },
             data: { 
-              deliveryRepartidorId: repartidorId, // Para entregas usar deliveryRepartidorId
-              status: 'READY_FOR_DELIVERY' // Cambiar estado al asignar
+              deliveryRepartidorId: repartidorId // Para entregas mantener IN_PROCESS pero asignar repartidor
             }
           });
 
@@ -2652,8 +2692,7 @@ async function generateOptimizedRouteForZone(repartidorId, date, zone, services,
           await tx.service.update({
             where: { id: service.id },
             data: { 
-              deliveryRepartidorId: repartidorId, // Para entregas usar deliveryRepartidorId
-              status: 'READY_FOR_DELIVERY' // Cambiar estado al asignar
+              deliveryRepartidorId: repartidorId // Para entregas mantener IN_PROCESS pero asignar repartidor
             }
           });
         }
