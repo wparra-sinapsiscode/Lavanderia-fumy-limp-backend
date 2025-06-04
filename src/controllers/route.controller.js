@@ -1664,9 +1664,11 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
   };
 
   // Incluir servicios pendientes de recogida si es de tipo 'pickup' o 'mixed'
+  // SOLO servicios SIN repartidor asignado (fondo amarillo)
   if (type === 'pickup' || type === 'mixed') {
     whereService.OR.push({
       status: 'PENDING_PICKUP',
+      repartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
       estimatedPickupDate: {
         gte: new Date(date + 'T00:00:00.000Z'),
         lt: new Date(date + 'T24:00:00.000Z')
@@ -1675,9 +1677,11 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
   }
 
   // Incluir servicios listos para entrega si es de tipo 'delivery' o 'mixed'
+  // SOLO servicios SIN deliveryRepartidorId asignado (fondo amarillo)
   if (type === 'delivery' || type === 'mixed') {
     whereService.OR.push({
       status: 'IN_PROCESS',
+      deliveryRepartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
       estimatedDeliveryDate: {
         gte: new Date(date + 'T00:00:00.000Z'),
         lt: new Date(date + 'T24:00:00.000Z')
@@ -1712,13 +1716,34 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
     return null;
   }
 
-  // Agrupar servicios por hotel
-  const servicesByHotel = {};
+  // Agrupar servicios por hotel y tipo
+  const hotelGroups = {};
   pendingServices.forEach(service => {
-    if (!servicesByHotel[service.hotelId]) {
-      servicesByHotel[service.hotelId] = [];
+    const hotelId = service.hotelId;
+    if (!hotelGroups[hotelId]) {
+      hotelGroups[hotelId] = {
+        hotel: service.hotel,
+        deliveries: [],
+        pickups: [],
+        highPriorityDeliveries: [],
+        highPriorityPickups: []
+      };
     }
-    servicesByHotel[service.hotelId].push(service);
+    
+    // Separar por tipo de servicio y prioridad
+    if (service.status === 'IN_PROCESS') {
+      if (service.priority === 'ALTA') {
+        hotelGroups[hotelId].highPriorityDeliveries.push(service);
+      } else {
+        hotelGroups[hotelId].deliveries.push(service);
+      }
+    } else if (service.status === 'PENDING_PICKUP') {
+      if (service.priority === 'ALTA') {
+        hotelGroups[hotelId].highPriorityPickups.push(service);
+      } else {
+        hotelGroups[hotelId].pickups.push(service);
+      }
+    }
   });
 
   // Crear la ruta recomendada
@@ -1739,26 +1764,63 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
       }
     });
 
-    // Crear las paradas de la ruta
+    // Crear las paradas de la ruta con orden optimizado
     const routeStops = [];
     let order = 1;
 
-    // Primero agregar los hoteles con servicios de alta prioridad
-    const hotelIds = Object.keys(servicesByHotel);
-    
-    for (const hotelId of hotelIds) {
-      const services = servicesByHotel[hotelId];
-      const highPriorityServices = services.filter(s => s.priority === 'ALTA');
-      
-      if (highPriorityServices.length > 0) {
-        for (const service of highPriorityServices) {
+    // Ordenar hoteles por prioridad y proximidad
+    const orderedHotels = optimizeHotelOrder(Object.values(hotelGroups));
+
+    // FASE 1: Servicios de alta prioridad (individuales)
+    for (const hotelGroup of orderedHotels) {
+      // Alta prioridad - Entregas individuales
+      for (const service of hotelGroup.highPriorityDeliveries) {
+        if (type === 'delivery' || type === 'mixed') {
+          // Actualizar asignación del repartidor al servicio de ENTREGA
+          await tx.service.update({
+            where: { id: service.id },
+            data: { 
+              deliveryRepartidorId: repartidorId,
+              status: 'READY_FOR_DELIVERY'
+            }
+          });
+
           const routeStop = await tx.routeStop.create({
             data: {
               routeId: route.id,
-              hotelId,
+              hotelId: hotelGroup.hotel.id,
               serviceId: service.id,
               order: order++,
-              notes: `Servicio ${service.status === 'PENDING_PICKUP' ? 'recogida' : 'entrega'} - Alta prioridad`
+              notes: `ENTREGA - ${service.guestName} (Hab. ${service.roomNumber}) - ALTA PRIORIDAD`
+            },
+            include: {
+              hotel: true,
+              service: true
+            }
+          });
+          routeStops.push(routeStop);
+        }
+      }
+
+      // Alta prioridad - Recojos individuales
+      for (const service of hotelGroup.highPriorityPickups) {
+        if (type === 'pickup' || type === 'mixed') {
+          // Actualizar asignación del repartidor al servicio de RECOJO
+          await tx.service.update({
+            where: { id: service.id },
+            data: { 
+              repartidorId: repartidorId,
+              status: 'ASSIGNED_TO_ROUTE'
+            }
+          });
+
+          const routeStop = await tx.routeStop.create({
+            data: {
+              routeId: route.id,
+              hotelId: hotelGroup.hotel.id,
+              serviceId: service.id,
+              order: order++,
+              notes: `RECOJO - ${service.guestName} (Hab. ${service.roomNumber}) - ALTA PRIORIDAD`
             },
             include: {
               hotel: true,
@@ -1770,49 +1832,64 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
       }
     }
 
-    // Luego agregar los demás servicios agrupados por hotel
-    for (const hotelId of hotelIds) {
-      const services = servicesByHotel[hotelId];
-      const normalPriorityServices = services.filter(s => s.priority !== 'ALTA');
-      
-      if (normalPriorityServices.length > 0) {
-        // Agrupar servicios del mismo hotel en una sola parada
-        const pickupServices = normalPriorityServices.filter(s => s.status === 'PENDING_PICKUP');
-        const deliveryServices = normalPriorityServices.filter(s => s.status === 'IN_PROCESS');
-        
-        if (pickupServices.length > 0 && (type === 'pickup' || type === 'mixed')) {
-          const routeStop = await tx.routeStop.create({
-            data: {
-              routeId: route.id,
-              hotelId,
-              serviceId: pickupServices[0].id,  // Asignar el primer servicio
-              order: order++,
-              notes: `Recogida - ${pickupServices.length} servicio(s)`
-            },
-            include: {
-              hotel: true,
-              service: true
+    // FASE 2: Servicios normales agrupados (entregas primero, luego recojos)
+    for (const hotelGroup of orderedHotels) {
+      // Entregas normales agrupadas
+      if (hotelGroup.deliveries.length > 0 && (type === 'delivery' || type === 'mixed')) {
+        // Actualizar asignación del repartidor a todos los servicios de ENTREGA
+        for (const service of hotelGroup.deliveries) {
+          await tx.service.update({
+            where: { id: service.id },
+            data: { 
+              deliveryRepartidorId: repartidorId,
+              status: 'READY_FOR_DELIVERY'
             }
           });
-          routeStops.push(routeStop);
         }
-        
-        if (deliveryServices.length > 0 && (type === 'delivery' || type === 'mixed')) {
-          const routeStop = await tx.routeStop.create({
-            data: {
-              routeId: route.id,
-              hotelId,
-              serviceId: deliveryServices[0].id,  // Asignar el primer servicio
-              order: order++,
-              notes: `Entrega - ${deliveryServices.length} servicio(s)`
-            },
-            include: {
-              hotel: true,
-              service: true
+
+        const routeStop = await tx.routeStop.create({
+          data: {
+            routeId: route.id,
+            hotelId: hotelGroup.hotel.id,
+            serviceId: hotelGroup.deliveries[0].id,
+            order: order++,
+            notes: `ENTREGA - ${hotelGroup.deliveries.length} servicio(s) | ${hotelGroup.deliveries.reduce((sum, s) => sum + (s.bagCount || 0), 0)} bolsa(s)`
+          },
+          include: {
+            hotel: true,
+            service: true
+          }
+        });
+        routeStops.push(routeStop);
+      }
+
+      // Recojos normales agrupados
+      if (hotelGroup.pickups.length > 0 && (type === 'pickup' || type === 'mixed')) {
+        // Actualizar asignación del repartidor a todos los servicios de RECOJO
+        for (const service of hotelGroup.pickups) {
+          await tx.service.update({
+            where: { id: service.id },
+            data: { 
+              repartidorId: repartidorId,
+              status: 'ASSIGNED_TO_ROUTE'
             }
           });
-          routeStops.push(routeStop);
         }
+
+        const routeStop = await tx.routeStop.create({
+          data: {
+            routeId: route.id,
+            hotelId: hotelGroup.hotel.id,
+            serviceId: hotelGroup.pickups[0].id,
+            order: order++,
+            notes: `RECOJO - ${hotelGroup.pickups.length} servicio(s) | ${hotelGroup.pickups.reduce((sum, s) => sum + (s.bagCount || 0), 0)} bolsa(s)`
+          },
+          include: {
+            hotel: true,
+            service: true
+          }
+        });
+        routeStops.push(routeStop);
       }
     }
 
@@ -1910,14 +1987,14 @@ function formatRouteForFrontend(routeData) {
 }
 
 /**
- * Generate automatic routes for pickup services only
+ * Generate automatic routes for pickup and delivery services (mixed routes)
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  * @returns {Object} Response with generated routes
  */
 exports.generateAutomaticRoutes = async (req, res) => {
   try {
-    const { date, zones } = req.body;
+    const { date, zones, type = 'mixed' } = req.body;
     
     // Validar fecha
     if (!date) {
@@ -1927,17 +2004,54 @@ exports.generateAutomaticRoutes = async (req, res) => {
       });
     }
 
+    // Validar tipo de ruta
+    if (!['pickup', 'delivery', 'mixed'].includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El tipo de ruta debe ser: pickup, delivery o mixed'
+      });
+    }
+
     // Si no se especifican zonas, usar todas
     const targetZones = zones && zones.length > 0 ? zones : ['NORTE', 'SUR', 'ESTE', 'OESTE', 'CENTRO'];
 
-    // Obtener solo servicios pendientes de recogida
-    const services = await prisma.service.findMany({
-      where: {
+    // Construir consulta para obtener servicios según el tipo
+    const whereService = {
+      OR: [],
+      hotel: {
+        zone: { in: targetZones }
+      }
+    };
+
+    // Incluir servicios de recogida si es pickup o mixed
+    // SOLO servicios SIN repartidor asignado (fondo amarillo)
+    if (type === 'pickup' || type === 'mixed') {
+      whereService.OR.push({
         status: 'PENDING_PICKUP',
-        hotel: {
-          zone: { in: targetZones }
+        repartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
+        estimatedPickupDate: {
+          gte: new Date(date + 'T00:00:00.000Z'),
+          lt: new Date(date + 'T24:00:00.000Z')
         }
-      },
+      });
+    }
+
+    // Incluir servicios de entrega si es delivery o mixed  
+    // SOLO servicios SIN deliveryRepartidorId asignado (fondo amarillo)
+    if (type === 'delivery' || type === 'mixed') {
+      whereService.OR.push({
+        status: 'IN_PROCESS',
+        deliveryRepartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
+        estimatedDeliveryDate: {
+          gte: new Date(date + 'T00:00:00.000Z'),
+          lt: new Date(date + 'T24:00:00.000Z')
+        }
+      });
+    }
+
+    // Obtener servicios según el tipo especificado
+    const services = await prisma.service.findMany({
+      where: whereService,
       include: {
         hotel: {
           select: {
@@ -1957,9 +2071,12 @@ exports.generateAutomaticRoutes = async (req, res) => {
     });
 
     if (services.length === 0) {
+      const serviceTypeMsg = type === 'pickup' ? 'recogida' : 
+                           type === 'delivery' ? 'entrega' : 
+                           'recogida y entrega';
       return res.status(200).json({
         success: true,
-        message: 'No hay servicios pendientes de recogida para las zonas especificadas',
+        message: `No hay servicios pendientes de ${serviceTypeMsg} para las zonas especificadas`,
         data: []
       });
     }
@@ -2001,7 +2118,7 @@ exports.generateAutomaticRoutes = async (req, res) => {
       repartidoresByZone[rep.zone].push(rep);
     });
 
-    // Generar UNA ruta por cada zona
+    // Generar UNA ruta por cada zona usando la nueva lógica optimizada
     const generatedRoutes = [];
     
     for (const [zone, zoneServices] of Object.entries(servicesByZone)) {
@@ -2012,119 +2129,51 @@ exports.generateAutomaticRoutes = async (req, res) => {
         continue;
       }
 
-      // Agrupar servicios por hotel
-      const servicesByHotel = {};
-      
-      zoneServices.forEach(service => {
-        const hotelId = service.hotel.id;
-        if (!servicesByHotel[hotelId]) {
-          servicesByHotel[hotelId] = {
-            hotel: service.hotel,
-            services: []
-          };
-        }
-        servicesByHotel[hotelId].services.push(service);
-      });
-
-      // Convertir a array de hoteles con servicios
-      const hotelsWithServices = Object.values(servicesByHotel);
-      
-      // Ordenar hoteles por prioridad y proximidad
-      const sortedHotels = sortHotelsByPriorityAndProximity(hotelsWithServices);
-      
-      // Asignar el primer repartidor disponible de la zona
+      // Usar el primer repartidor disponible de la zona
       const repartidor = zoneRepartidores[0];
-      
-      // Calcular estadísticas de la ruta
-      const totalServices = zoneServices.length;
-      const totalBags = zoneServices.reduce((sum, service) => sum + (service.bagCount || 0), 0);
-      const totalHotels = sortedHotels.length;
-      
-      // Crear UNA SOLA ruta para toda la zona
-      const routeName = `Ruta ${zone} - Recogida ${new Date(date).toLocaleDateString('es-PE')}`;
-      
-      const route = await prisma.$transaction(async (tx) => {
-        // First create the route
-        const createdRoute = await tx.route.create({
-          data: {
-            name: routeName,
-            date: normalizeDateForDB(date),
-            repartidorId: repartidor.id,
-            status: 'PLANNED',
-            notes: `Zona: ${zone} | ${totalHotels} hotel(es) | ${totalServices} servicio(s) | ${totalBags} bolsa(s)`
-          }
-        });
 
-        // Then create stops and update service assignments
-        const stops = [];
-        let stopOrder = 1;
-        
-        for (const hotelData of sortedHotels) {
-          const hotelServices = hotelData.services;
-          
-          for (const service of hotelServices) {
-            // ✅ UPDATE SERVICE REPARTIDOR ASSIGNMENT
-            await tx.service.update({
-              where: { id: service.id },
-              data: { repartidorId: repartidor.id }
-            });
-
-            // Create the stop
-            const stop = await tx.routeStop.create({
-              data: {
-                routeId: createdRoute.id,
-                hotelId: hotelData.hotel.id,
-                serviceId: service.id,
-                order: stopOrder++,
-                status: 'PENDING',
-                scheduledTime: calculateScheduledTimeWithDuration(date, sortedHotels.indexOf(hotelData), sortedHotels),
-                notes: `${service.guestName} - Hab. ${service.roomNumber} | ${service.bagCount} bolsa(s) | ${service.priority}`
-              },
-              include: {
-                hotel: true,
-                service: true
-              }
-            });
-            
-            stops.push(stop);
-          }
+      try {
+        // Usar la nueva función optimizada que agrupa por hotel y tipo
+        const result = await generateOptimizedRouteForZone(repartidor.id, date, zone, zoneServices, type);
+        if (result) {
+          generatedRoutes.push(result);
         }
-
-        // Get repartidor info
-        const repartidor_info = await tx.user.findUnique({
-          where: { id: repartidor.id },
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            zone: true
-          }
-        });
-
-        // Return route with all data
-        return {
-          ...createdRoute,
-          stops,
-          repartidor: repartidor_info
-        };
-      });
-      
-      generatedRoutes.push(route);
+      } catch (err) {
+        console.error(`Error generando ruta optimizada para zona ${zone}:`, err);
+        // Continuar con la siguiente zona
+      }
     }
+
+    // Calcular estadísticas finales
+    const totalPickups = services.filter(s => s.status === 'PENDING_PICKUP').length;
+    const totalDeliveries = services.filter(s => s.status === 'IN_PROCESS').length;
+    
+    const routeTypeMsg = type === 'pickup' ? 'recogida' : 
+                        type === 'delivery' ? 'entrega' : 
+                        'mixtas (recogida y entrega)';
 
     return res.status(200).json({
       success: true,
-      message: `Se generaron ${generatedRoutes.length} rutas de recogida (una por zona)`,
+      message: `Se generaron ${generatedRoutes.length} rutas ${routeTypeMsg} (una por zona)`,
       data: generatedRoutes,
       summary: {
+        type,
         totalRoutes: generatedRoutes.length,
         totalServices: services.length,
+        totalPickups,
+        totalDeliveries,
         zones: Object.keys(servicesByZone),
-        routesByZone: Object.entries(servicesByZone).map(([zone, services]) => ({
-          zone,
-          services: services.length,
-          bags: services.reduce((sum, s) => sum + (s.bagCount || 0), 0)
-        }))
+        routesByZone: Object.entries(servicesByZone).map(([zone, zoneServices]) => {
+          const pickups = zoneServices.filter(s => s.status === 'PENDING_PICKUP').length;
+          const deliveries = zoneServices.filter(s => s.status === 'IN_PROCESS').length;
+          return {
+            zone,
+            services: zoneServices.length,
+            pickups,
+            deliveries,
+            bags: zoneServices.reduce((sum, s) => sum + (s.bagCount || 0), 0)
+          };
+        })
       }
     });
 
@@ -2330,6 +2379,337 @@ async function generateRouteForZone(repartidorId, date, zone, services) {
       stats: {
         totalPickups: totalServices,
         totalDeliveries: 0,
+        serviceCount: totalServices,
+        totalBags,
+        totalHotels
+      }
+    };
+  });
+
+  return result;
+}
+
+/**
+ * Optimizes the order of hotels for route generation
+ * Prioritizes hotels with high priority services and groups by proximity
+ * @param {Array} hotelGroups - Array of hotel group objects
+ * @returns {Array} Optimized array of hotel groups
+ */
+function optimizeHotelOrder(hotelGroups) {
+  // Calcular prioridad de cada hotel
+  const hotelsWithPriority = hotelGroups.map(group => {
+    let priorityScore = 0;
+    
+    // Puntuación por servicios de alta prioridad
+    priorityScore += (group.highPriorityDeliveries.length + group.highPriorityPickups.length) * 100;
+    
+    // Puntuación por tipo de servicios (entregas tienen prioridad)
+    priorityScore += group.deliveries.length * 10;
+    priorityScore += group.pickups.length * 5;
+    
+    // Puntuación por número total de bolsas
+    const totalBags = [
+      ...group.deliveries,
+      ...group.pickups,
+      ...group.highPriorityDeliveries,
+      ...group.highPriorityPickups
+    ].reduce((sum, service) => sum + (service.bagCount || 0), 0);
+    
+    priorityScore += totalBags * 2;
+
+    return {
+      ...group,
+      priorityScore,
+      hasHighPriority: (group.highPriorityDeliveries.length + group.highPriorityPickups.length) > 0,
+      hasCoordinates: group.hotel.latitude && group.hotel.longitude
+    };
+  });
+
+  // Separar hoteles por categorías
+  const highPriorityHotels = hotelsWithPriority.filter(h => h.hasHighPriority);
+  const normalHotels = hotelsWithPriority.filter(h => !h.hasHighPriority);
+
+  // Ordenar cada categoría
+  const sortByPriorityAndProximity = (hotels) => {
+    // Separar hoteles con y sin coordenadas
+    const withCoords = hotels.filter(h => h.hasCoordinates);
+    const withoutCoords = hotels.filter(h => !h.hasCoordinates);
+    
+    // Ordenar por puntuación de prioridad
+    withCoords.sort((a, b) => b.priorityScore - a.priorityScore);
+    withoutCoords.sort((a, b) => b.priorityScore - a.priorityScore);
+    
+    // Si hay hoteles con coordenadas, aplicar algoritmo de proximidad básico
+    if (withCoords.length > 1) {
+      const optimizedCoords = optimizeByProximity(withCoords);
+      return [...optimizedCoords, ...withoutCoords];
+    }
+    
+    return [...withCoords, ...withoutCoords];
+  };
+
+  // Combinar y retornar
+  return [
+    ...sortByPriorityAndProximity(highPriorityHotels),
+    ...sortByPriorityAndProximity(normalHotels)
+  ];
+}
+
+/**
+ * Simple proximity optimization using nearest neighbor algorithm
+ * @param {Array} hotels - Hotels with coordinates
+ * @returns {Array} Optimized order of hotels
+ */
+function optimizeByProximity(hotels) {
+  if (hotels.length <= 1) return hotels;
+
+  const optimized = [];
+  const unvisited = [...hotels];
+  
+  // Empezar con el hotel de mayor prioridad
+  let currentHotel = unvisited.reduce((max, hotel) => 
+    hotel.priorityScore > max.priorityScore ? hotel : max
+  );
+  
+  optimized.push(currentHotel);
+  unvisited.splice(unvisited.indexOf(currentHotel), 1);
+
+  // Aplicar algoritmo del vecino más cercano
+  while (unvisited.length > 0) {
+    let nearestHotel = null;
+    let minDistance = Infinity;
+
+    unvisited.forEach(hotel => {
+      const distance = calculateDistance(
+        currentHotel.hotel.latitude,
+        currentHotel.hotel.longitude,
+        hotel.hotel.latitude,
+        hotel.hotel.longitude
+      );
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearestHotel = hotel;
+      }
+    });
+
+    if (nearestHotel) {
+      optimized.push(nearestHotel);
+      unvisited.splice(unvisited.indexOf(nearestHotel), 1);
+      currentHotel = nearestHotel;
+    } else {
+      // Si no se encuentra el más cercano, agregar el siguiente disponible
+      optimized.push(unvisited[0]);
+      unvisited.splice(0, 1);
+    }
+  }
+
+  return optimized;
+}
+
+/**
+ * Generate an optimized route for a specific zone with mixed services
+ * @param {string} repartidorId - ID of the repartidor
+ * @param {string} date - Date for the route (YYYY-MM-DD) 
+ * @param {string} zone - Zone name
+ * @param {Array} services - Services for this zone
+ * @param {string} type - Route type (pickup, delivery, mixed)
+ * @returns {Object} Generated route with optimized stops
+ */
+async function generateOptimizedRouteForZone(repartidorId, date, zone, services, type = 'mixed') {
+  // Agrupar servicios por hotel y tipo usando la nueva lógica
+  const hotelGroups = {};
+  services.forEach(service => {
+    const hotelId = service.hotelId;
+    if (!hotelGroups[hotelId]) {
+      hotelGroups[hotelId] = {
+        hotel: service.hotel,
+        deliveries: [],
+        pickups: [],
+        highPriorityDeliveries: [],
+        highPriorityPickups: []
+      };
+    }
+    
+    // Separar por tipo de servicio y prioridad
+    if (service.status === 'IN_PROCESS') {
+      if (service.priority === 'ALTA') {
+        hotelGroups[hotelId].highPriorityDeliveries.push(service);
+      } else {
+        hotelGroups[hotelId].deliveries.push(service);
+      }
+    } else if (service.status === 'PENDING_PICKUP') {
+      if (service.priority === 'ALTA') {
+        hotelGroups[hotelId].highPriorityPickups.push(service);
+      } else {
+        hotelGroups[hotelId].pickups.push(service);
+      }
+    }
+  });
+
+  // Ordenar hoteles usando la función optimizada
+  const orderedHotels = optimizeHotelOrder(Object.values(hotelGroups));
+
+  // Calcular estadísticas de la ruta
+  const totalServices = services.length;
+  const totalPickups = services.filter(s => s.status === 'PENDING_PICKUP').length;
+  const totalDeliveries = services.filter(s => s.status === 'IN_PROCESS').length;
+  const totalBags = services.reduce((sum, service) => sum + (service.bagCount || 0), 0);
+  const totalHotels = orderedHotels.length;
+
+  // Crear el nombre de la ruta según el tipo
+  const routeTypeName = type === 'pickup' ? 'Recogida' : 
+                       type === 'delivery' ? 'Entrega' : 
+                       'Mixta';
+  const routeName = `Ruta ${zone} - ${routeTypeName} ${new Date(date).toLocaleDateString('es-PE')}`;
+  
+  const result = await prisma.$transaction(async (tx) => {
+    // Crear la ruta principal
+    const route = await tx.route.create({
+      data: {
+        name: routeName,
+        date: normalizeDateForDB(date),
+        repartidorId,
+        status: 'PLANNED',
+        notes: `Zona: ${zone} | ${totalHotels} hotel(es) | ${totalServices} servicio(s) (${totalPickups} recojo, ${totalDeliveries} entrega) | ${totalBags} bolsa(s)`
+      },
+      include: {
+        repartidor: true
+      }
+    });
+
+    // Crear las paradas optimizadas
+    const routeStops = [];
+    let order = 1;
+
+    // FASE 1: Servicios de alta prioridad (individuales)
+    for (const hotelGroup of orderedHotels) {
+      // Alta prioridad - Entregas individuales
+      for (const service of hotelGroup.highPriorityDeliveries) {
+        if (type === 'delivery' || type === 'mixed') {
+          // Actualizar asignación del repartidor al servicio de ENTREGA
+          await tx.service.update({
+            where: { id: service.id },
+            data: { 
+              deliveryRepartidorId: repartidorId, // Para entregas usar deliveryRepartidorId
+              status: 'READY_FOR_DELIVERY' // Cambiar estado al asignar
+            }
+          });
+
+          const routeStop = await tx.routeStop.create({
+            data: {
+              routeId: route.id,
+              hotelId: hotelGroup.hotel.id,
+              serviceId: service.id,
+              order: order++,
+              notes: `ENTREGA - ${service.guestName} (Hab. ${service.roomNumber}) - ALTA PRIORIDAD`
+            },
+            include: {
+              hotel: true,
+              service: true
+            }
+          });
+          routeStops.push(routeStop);
+        }
+      }
+
+      // Alta prioridad - Recojos individuales
+      for (const service of hotelGroup.highPriorityPickups) {
+        if (type === 'pickup' || type === 'mixed') {
+          // Actualizar asignación del repartidor al servicio de RECOJO
+          await tx.service.update({
+            where: { id: service.id },
+            data: { 
+              repartidorId: repartidorId, // Para recojos usar repartidorId
+              status: 'ASSIGNED_TO_ROUTE' // Cambiar estado al asignar
+            }
+          });
+
+          const routeStop = await tx.routeStop.create({
+            data: {
+              routeId: route.id,
+              hotelId: hotelGroup.hotel.id,
+              serviceId: service.id,
+              order: order++,
+              notes: `RECOJO - ${service.guestName} (Hab. ${service.roomNumber}) - ALTA PRIORIDAD`
+            },
+            include: {
+              hotel: true,
+              service: true
+            }
+          });
+          routeStops.push(routeStop);
+        }
+      }
+    }
+
+    // FASE 2: Servicios normales agrupados (entregas primero, luego recojos)
+    for (const hotelGroup of orderedHotels) {
+      // Entregas normales agrupadas
+      if (hotelGroup.deliveries.length > 0 && (type === 'delivery' || type === 'mixed')) {
+        // Actualizar asignación del repartidor a todos los servicios de ENTREGA
+        for (const service of hotelGroup.deliveries) {
+          await tx.service.update({
+            where: { id: service.id },
+            data: { 
+              deliveryRepartidorId: repartidorId, // Para entregas usar deliveryRepartidorId
+              status: 'READY_FOR_DELIVERY' // Cambiar estado al asignar
+            }
+          });
+        }
+
+        const routeStop = await tx.routeStop.create({
+          data: {
+            routeId: route.id,
+            hotelId: hotelGroup.hotel.id,
+            serviceId: hotelGroup.deliveries[0].id,
+            order: order++,
+            notes: `ENTREGA - ${hotelGroup.deliveries.length} servicio(s) | ${hotelGroup.deliveries.reduce((sum, s) => sum + (s.bagCount || 0), 0)} bolsa(s)`
+          },
+          include: {
+            hotel: true,
+            service: true
+          }
+        });
+        routeStops.push(routeStop);
+      }
+
+      // Recojos normales agrupados
+      if (hotelGroup.pickups.length > 0 && (type === 'pickup' || type === 'mixed')) {
+        // Actualizar asignación del repartidor a todos los servicios de RECOJO
+        for (const service of hotelGroup.pickups) {
+          await tx.service.update({
+            where: { id: service.id },
+            data: { 
+              repartidorId: repartidorId, // Para recojos usar repartidorId
+              status: 'ASSIGNED_TO_ROUTE' // Cambiar estado al asignar
+            }
+          });
+        }
+
+        const routeStop = await tx.routeStop.create({
+          data: {
+            routeId: route.id,
+            hotelId: hotelGroup.hotel.id,
+            serviceId: hotelGroup.pickups[0].id,
+            order: order++,
+            notes: `RECOJO - ${hotelGroup.pickups.length} servicio(s) | ${hotelGroup.pickups.reduce((sum, s) => sum + (s.bagCount || 0), 0)} bolsa(s)`
+          },
+          include: {
+            hotel: true,
+            service: true
+          }
+        });
+        routeStops.push(routeStop);
+      }
+    }
+
+    return { 
+      route, 
+      routeStops, 
+      stats: {
+        totalPickups,
+        totalDeliveries,
         serviceCount: totalServices,
         totalBags,
         totalHotels
