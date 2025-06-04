@@ -67,19 +67,9 @@ exports.registerGuest = async (req, res) => {
       });
     }
     
-    // Find available repartidor in the zone
-    const availableRepartidor = await prisma.user.findFirst({
-      where: {
-        role: 'REPARTIDOR',
-        zone: hotel.zone
-      },
-      orderBy: {
-        // Get repartidor with least assigned active services
-        servicesAssigned: {
-          _count: 'asc'
-        }
-      }
-    });
+    // No auto-assign repartidor - services will be assigned via route generation
+    // This allows the automatic route generation system to work properly
+    const availableRepartidor = null;
     
     // Create estimated dates
     const now = new Date();
@@ -103,7 +93,7 @@ exports.registerGuest = async (req, res) => {
         status: 'PENDING_PICKUP',
         estimatedPickupDate,
         estimatedDeliveryDate,
-        repartidorId: availableRepartidor?.id || null
+        repartidorId: null // Will be assigned during route generation
       }
     });
     
