@@ -7,6 +7,22 @@
 const { prisma } = require('../config/database');
 
 /**
+ * Helper function to normalize date for database storage
+ * Ensures consistent UTC date handling across all route operations
+ * @param {string} dateString - Date string in YYYY-MM-DD format
+ * @returns {Date} - Normalized UTC date for database storage
+ */
+function normalizeDateForDB(dateString) {
+  // Extract YYYY-MM-DD from date string
+  const targetDate = dateString.includes('T') ? dateString.split('T')[0] : dateString;
+  const [year, month, day] = targetDate.split('-').map(Number);
+  
+  // Create date at noon UTC to avoid timezone issues
+  // Using noon ensures the date stays consistent regardless of timezone
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+/**
  * Helper function to check if a service is a pickup service
  * @param {Object} service - Service object
  * @returns {boolean} True if it's a pickup service
@@ -59,7 +75,7 @@ exports.createRoute = async (req, res) => {
       const route = await tx.route.create({
         data: {
           name,
-          date: new Date(date),
+          date: normalizeDateForDB(date), // Usar función helper para normalizar fecha
           repartidorId,
           notes,
           status: 'PLANNED'
@@ -148,23 +164,31 @@ exports.getRoutes = async (req, res) => {
     }
 
     if (date) {
-      // Usar comparación por fecha exacta sin depender de zona horaria del servidor
-      const targetDate = date.includes('T') ? date.split('T')[0] : date; // Extraer YYYY-MM-DD
+      // Extraer YYYY-MM-DD de la fecha recibida
+      const targetDate = date.includes('T') ? date.split('T')[0] : date;
+      
+      // Usar UTC explícitamente para evitar desfase de zona horaria
+      const [year, month, day] = targetDate.split('-').map(Number);
+      const startDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+      const endDate = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
       
       where.date = {
-        gte: new Date(targetDate + 'T00:00:00.000Z'),
-        lt: new Date(targetDate + 'T24:00:00.000Z') // Equivale al día siguiente 00:00:00
+        gte: startDate,
+        lt: endDate
       };
     }
 
     if (startDate && endDate) {
-      // Manejar rango de fechas con comparación exacta
+      // Manejar rango de fechas usando UTC explícitamente
       const startDateStr = startDate.includes('T') ? startDate.split('T')[0] : startDate;
       const endDateStr = endDate.includes('T') ? endDate.split('T')[0] : endDate;
       
+      const [startYear, startMonth, startDay] = startDateStr.split('-').map(Number);
+      const [endYear, endMonth, endDay] = endDateStr.split('-').map(Number);
+      
       where.date = {
-        gte: new Date(startDateStr + 'T00:00:00.000Z'),
-        lt: new Date(endDateStr + 'T24:00:00.000Z')
+        gte: new Date(Date.UTC(startYear, startMonth - 1, startDay, 0, 0, 0)),
+        lt: new Date(Date.UTC(endYear, endMonth - 1, endDay + 1, 0, 0, 0)) // Siguiente día a las 00:00
       };
     }
 
@@ -553,7 +577,7 @@ exports.updateRoute = async (req, res) => {
     const updateData = {};
 
     if (name) updateData.name = name;
-    if (date) updateData.date = new Date(date);
+    if (date) updateData.date = normalizeDateForDB(date);
     if (repartidorId) {
       const repartidor = await prisma.user.findUnique({
         where: { id: repartidorId }
@@ -1193,10 +1217,11 @@ exports.deleteRoutesByDate = async (req, res) => {
       });
     }
 
-    // Crear rango de fecha con comparación exacta sin zona horaria
+    // Crear rango de fecha usando UTC explícitamente para evitar desfase de zona horaria
     const dateStr = date.includes('T') ? date.split('T')[0] : date;
-    const startDate = new Date(dateStr + 'T00:00:00.000Z');
-    const endDate = new Date(dateStr + 'T24:00:00.000Z');
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const startDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+    const endDate = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
 
     // Encontrar rutas para la fecha especificada
     const routesToDelete = await prisma.route.findMany({
@@ -1704,7 +1729,7 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
     const route = await tx.route.create({
       data: {
         name: routeName,
-        date: new Date(date),
+        date: normalizeDateForDB(date),
         repartidorId,
         status: 'PLANNED',
         notes: `Ruta generada automáticamente para servicios ${type}`
@@ -2023,7 +2048,7 @@ exports.generateAutomaticRoutes = async (req, res) => {
         const createdRoute = await tx.route.create({
           data: {
             name: routeName,
-            date: new Date(date),
+            date: normalizeDateForDB(date),
             repartidorId: repartidor.id,
             status: 'PLANNED',
             notes: `Zona: ${zone} | ${totalHotels} hotel(es) | ${totalServices} servicio(s) | ${totalBags} bolsa(s)`
@@ -2250,7 +2275,7 @@ async function generateRouteForZone(repartidorId, date, zone, services) {
     const route = await tx.route.create({
       data: {
         name: routeName,
-        date: new Date(date),
+        date: normalizeDateForDB(date),
         repartidorId,
         status: 'PLANNED',
         notes: `Zona: ${zone} | ${totalHotels} hotel(es) | ${totalServices} servicio(s) | ${totalBags} bolsa(s)`

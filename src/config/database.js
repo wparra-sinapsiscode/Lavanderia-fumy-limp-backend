@@ -40,6 +40,27 @@ async function connectToDatabase() {
     await prisma.$connect();
     console.log('✅ Database connection established');
     
+    // Configurar la zona horaria para esta sesión
+    try {
+      await prisma.$executeRaw`SET TIMEZONE TO 'America/Lima'`;
+      console.log('✅ Timezone set to America/Lima for this session');
+      
+      // Verificar la configuración de timezone
+      const timezoneResult = await prisma.$queryRaw`SELECT current_setting('TIMEZONE') as timezone`;
+      console.log('✅ Current session timezone:', timezoneResult[0].timezone);
+      
+      // Mostrar la hora actual del servidor
+      const timeResult = await prisma.$queryRaw`
+        SELECT 
+          CURRENT_TIMESTAMP as server_time,
+          CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima' as lima_time
+      `;
+      console.log('✅ Server time:', timeResult[0].server_time);
+      console.log('✅ Lima time:', timeResult[0].lima_time);
+    } catch (tzError) {
+      console.warn('⚠️ Could not set timezone:', tzError.message);
+    }
+    
     // Verificar la conexión ejecutando una consulta simple
     const testResult = await prisma.$queryRaw`SELECT 1 as connected`;
     console.log('✅ Database query test successful');

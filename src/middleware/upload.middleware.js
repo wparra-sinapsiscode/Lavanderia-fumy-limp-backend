@@ -37,9 +37,10 @@ const storage = multer.diskStorage({
       } else {
         folder = path.join(uploadsDir, 'services');
         
-        // Create service-specific folder if we have serviceId
-        if (req.params.serviceId) {
-          const serviceDir = path.join(folder, req.params.serviceId);
+        // Create service-specific folder if we have serviceId or id
+        const serviceId = req.params.serviceId || req.params.id;
+        if (serviceId) {
+          const serviceDir = path.join(folder, serviceId);
           if (!fs.existsSync(serviceDir)) {
             fs.mkdirSync(serviceDir, { recursive: true });
           }
@@ -274,8 +275,9 @@ exports.processBase64Image = (fieldName) => {
       if (fieldName === 'signature') {
         folder = path.join(uploadsDir, 'signatures');
       } else if (fieldName === 'photo' || fieldName.includes('photo')) {
-        if (req.params.serviceId) {
-          folder = path.join(uploadsDir, 'services', req.params.serviceId);
+        const serviceId = req.params.serviceId || req.params.id;
+        if (serviceId) {
+          folder = path.join(uploadsDir, 'services', serviceId);
         } else {
           folder = path.join(uploadsDir, 'services');
         }

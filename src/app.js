@@ -2,6 +2,9 @@
  * Main application file for Fumy Limp Backend
  */
 
+// Configurar zona horaria ANTES de cualquier otro import
+process.env.TZ = 'America/Lima';
+
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
