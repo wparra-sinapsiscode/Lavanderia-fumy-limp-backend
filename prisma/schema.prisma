@@ -161,6 +161,7 @@ model Service {
   pickupDate              DateTime?
   estimatedPickupDate     DateTime
   labeledDate             DateTime?
+  processStartDate        DateTime?
   deliveryDate            DateTime?
   estimatedDeliveryDate   DateTime?
   status                  ServiceStatus   @default(PENDING_PICKUP)

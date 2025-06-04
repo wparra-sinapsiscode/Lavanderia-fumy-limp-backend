@@ -582,6 +582,12 @@ exports.updateServiceStatus = async (req, res) => {
       case 'PICKED_UP':
         updateData.pickupDate = new Date();
         break;
+      case 'LABELED':
+        updateData.labeledDate = new Date();
+        break;
+      case 'IN_PROCESS':
+        updateData.processStartDate = new Date();
+        break;
       case 'COMPLETED':
         updateData.deliveryDate = new Date();
         break;
