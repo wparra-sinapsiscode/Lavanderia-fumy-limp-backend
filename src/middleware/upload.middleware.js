@@ -34,6 +34,16 @@ const storage = multer.diskStorage({
       // Check if this is for labeling (rótulos) or general service photos
       if (req.body.type === 'labeling') {
         folder = path.join(uploadsDir, 'labels');
+        
+        // Create service-specific folder for labeling photos (NUEVA FUNCIONALIDAD)
+        const serviceId = req.params.serviceId || req.params.id;
+        if (serviceId) {
+          const serviceDir = path.join(folder, serviceId);
+          if (!fs.existsSync(serviceDir)) {
+            fs.mkdirSync(serviceDir, { recursive: true });
+          }
+          folder = serviceDir;
+        }
       } else {
         folder = path.join(uploadsDir, 'services');
         
@@ -282,7 +292,13 @@ exports.processBase64Image = (fieldName) => {
           folder = path.join(uploadsDir, 'services');
         }
       } else if (fieldName === 'labelPhoto') {
-        folder = path.join(uploadsDir, 'labels');
+        // Organizar fotos de rótulos por servicio (NUEVA FUNCIONALIDAD)
+        const serviceId = req.params.serviceId || req.params.id;
+        if (serviceId) {
+          folder = path.join(uploadsDir, 'labels', serviceId);
+        } else {
+          folder = path.join(uploadsDir, 'labels');
+        }
       }
       
       // Ensure folder exists
