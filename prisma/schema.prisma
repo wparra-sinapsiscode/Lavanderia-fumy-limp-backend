@@ -41,9 +41,16 @@ enum ServiceStatus {
   LABELED
   IN_PROCESS
   READY_FOR_DELIVERY
+  OUT_FOR_DELIVERY
   PARTIAL_DELIVERY
+  DELIVERED
   COMPLETED
   CANCELLED
+}
+
+enum ServiceType {
+  PICKUP
+  DELIVERY
 }
 
 enum ServicePriority {
@@ -181,6 +188,10 @@ model Service {
   deliveryPhotos          String[]        @db.Text
   deliveredBagCount       Int?
   remainingBags           Int?
+  // 🆕 NUEVOS CAMPOS
+  serviceType             ServiceType     @default(PICKUP)
+  originalServiceId       String?
+  isDeliveryService       Boolean         @default(false)
   createdAt               DateTime        @default(now())
   updatedAt               DateTime        @updatedAt
 
@@ -192,11 +203,16 @@ model Service {
   transactions            Transaction[]
   auditLogs               AuditLog[]
   routeStops              RouteStop[]
+  // 🆕 NUEVAS RELACIONES PARA SERVICIOS DE ENTREGA
+  originalService         Service?        @relation("ServiceDelivery", fields: [originalServiceId], references: [id])
+  deliveryServices        Service[]       @relation("ServiceDelivery")
 
   @@index([hotelId])
   @@index([repartidorId])
   @@index([status])
   @@index([priority])
+  @@index([serviceType])
+  @@index([originalServiceId])
 }
 
 model BagLabel {

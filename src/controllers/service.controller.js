@@ -1801,3 +1801,483 @@ exports.createServiceLabels = async (req, res) => {
     });
   }
 };
+
+// 🆕 NUEVAS FUNCIONES PARA SERVICIOS DE ENTREGA
+
+// Create delivery service from original service
+exports.createDeliveryService = async (req, res) => {
+  try {
+    const { originalServiceId } = req.params;
+    const { bagCount, deliveryType = 'COMPLETE' } = req.body;
+    const userId = req.user.id;
+    
+    // Validar servicio original
+    const originalService = await prisma.service.findUnique({
+      where: { id: originalServiceId },
+      include: { hotel: true }
+    });
+    
+    if (!originalService) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio original no encontrado'
+      });
+    }
+    
+    if (originalService.status !== 'IN_PROCESS') {
+      return res.status(400).json({
+        success: false,
+        message: 'El servicio debe estar en estado "EN PROCESO" para crear entrega'
+      });
+    }
+    
+    // Función para asignar repartidor por zona
+    const assignRepartidorByZone = async (zone) => {
+      const repartidor = await prisma.user.findFirst({
+        where: {
+          role: 'REPARTIDOR',
+          zone: zone,
+          active: true
+        },
+        orderBy: {
+          createdAt: 'asc' // Asignar al más antiguo para rotación
+        }
+      });
+      return repartidor?.id || null;
+    };
+    
+    // Crear servicio de entrega en transacción
+    const result = await prisma.$transaction(async (tx) => {
+      // Crear servicio de entrega
+      const deliveryService = await tx.service.create({
+        data: {
+          guestName: originalService.guestName,
+          roomNumber: originalService.roomNumber,
+          hotelId: originalService.hotelId,
+          bagCount: parseInt(bagCount) || originalService.bagCount,
+          weight: originalService.weight,
+          price: originalService.price,
+          serviceType: 'DELIVERY',
+          isDeliveryService: true,
+          originalServiceId: originalServiceId,
+          status: 'READY_FOR_DELIVERY',
+          repartidorId: await assignRepartidorByZone(originalService.hotel.zone),
+          estimatedPickupDate: new Date(), // Para entrega inmediata
+          estimatedDeliveryDate: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2 horas
+          internalNotes: `Servicio de entrega creado desde ${originalServiceId} - Tipo: ${deliveryType}`,
+          createdAt: createLimaTimestamp()
+        },
+        include: {
+          hotel: true,
+          repartidor: {
+            select: { id: true, name: true }
+          },
+          originalService: {
+            select: { id: true, guestName: true, pickupDate: true }
+          }
+        }
+      });
+      
+      // Actualizar servicio original
+      let newStatus;
+      let updateData = {
+        internalNotes: (originalService.internalNotes || '') + 
+          `\n• ${createLimaTimestamp().toLocaleString('es-PE')}: Entrega ${deliveryType.toLowerCase()} procesada`
+      };
+
+      console.log('🔍 DEBUG - Actualizando servicio original:', {
+        serviceId: originalServiceId,
+        deliveryType,
+        originalBagCount: originalService.bagCount,
+        deliveryBagCount: parseInt(bagCount),
+        currentStatus: originalService.status
+      });
+
+      if (deliveryType === 'COMPLETE') {
+        // Entrega completa: marcar como completado
+        newStatus = 'COMPLETED';
+        updateData.status = newStatus;
+        updateData.deliveryDate = createLimaTimestamp();
+        console.log('✅ Entrega completa - Estado: COMPLETED');
+      } else if (deliveryType === 'PARTIAL') {
+        // Entrega parcial: cambiar a PARTIAL_DELIVERY y actualizar bolsas restantes
+        const remainingBags = originalService.bagCount - parseInt(bagCount);
+        console.log('🔍 Calculando bolsas restantes:', {
+          originalBags: originalService.bagCount,
+          deliveredBags: parseInt(bagCount),
+          remainingBags: remainingBags
+        });
+
+        if (remainingBags > 0) {
+          newStatus = 'PARTIAL_DELIVERY';
+          updateData.status = newStatus;
+          updateData.bagCount = remainingBags;
+          updateData.remainingBags = remainingBags;
+          updateData.deliveryDate = createLimaTimestamp();
+          console.log('✅ Entrega parcial - Estado: PARTIAL_DELIVERY, Bolsas restantes:', remainingBags);
+        } else {
+          // Si no quedan bolsas, marcar como completado
+          newStatus = 'COMPLETED';
+          updateData.status = newStatus;
+          updateData.deliveryDate = createLimaTimestamp();
+          console.log('✅ Entrega parcial final - Estado: COMPLETED (no quedan bolsas)');
+        }
+      }
+
+      console.log('🔍 Datos de actualización preparados:', updateData);
+      
+      const updatedOriginalService = await tx.service.update({
+        where: { id: originalServiceId },
+        data: updateData
+      });
+
+      console.log('✅ Servicio original actualizado en DB:', {
+        id: updatedOriginalService.id,
+        newStatus: updatedOriginalService.status,
+        newBagCount: updatedOriginalService.bagCount,
+        success: true
+      });
+      
+      // Crear audit log
+      await tx.auditLog.create({
+        data: {
+          action: 'DELIVERY_SERVICE_CREATED',
+          entity: 'service',
+          entityId: deliveryService.id,
+          details: `Servicio de entrega creado desde ${originalServiceId} - ${deliveryType} - ${bagCount} bolsas`,
+          userId: userId,
+          serviceId: deliveryService.id
+        }
+      });
+      
+      return { deliveryService, updatedOriginalService };
+    });
+    
+    res.status(201).json({
+      success: true,
+      message: `Servicio de entrega ${deliveryType.toLowerCase()} creado exitosamente`,
+      data: result.deliveryService
+    });
+    
+  } catch (error) {
+    console.error('Error creando servicio de entrega:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+};
+
+// Get services by type (PICKUP or DELIVERY)
+exports.getServicesByType = async (req, res) => {
+  try {
+    const { type } = req.params; // 'PICKUP' o 'DELIVERY'
+    const { repartidorId, zone, status, page = 1, limit = 50 } = req.query;
+    
+    // Validar tipo
+    if (!['PICKUP', 'DELIVERY'].includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tipo de servicio debe ser PICKUP o DELIVERY'
+      });
+    }
+    
+    // Construir filtros
+    const where = {
+      serviceType: type
+    };
+    
+    if (repartidorId) {
+      where.repartidorId = repartidorId;
+    }
+    
+    if (status) {
+      if (status.includes(',')) {
+        where.status = { in: status.split(',') };
+      } else {
+        where.status = status;
+      }
+    }
+    
+    // Filtro por zona (a través del hotel)
+    if (zone) {
+      where.hotel = { zone: zone };
+    }
+    
+    // Paginación
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+    
+    // Obtener servicios
+    const [services, total] = await Promise.all([
+      prisma.service.findMany({
+        where,
+        include: {
+          hotel: {
+            select: {
+              id: true,
+              name: true,
+              zone: true,
+              address: true
+            }
+          },
+          repartidor: {
+            select: {
+              id: true,
+              name: true,
+              zone: true
+            }
+          },
+          originalService: type === 'DELIVERY' ? {
+            select: {
+              id: true,
+              guestName: true,
+              pickupDate: true,
+              processStartDate: true
+            }
+          } : undefined,
+          deliveryServices: type === 'PICKUP' ? {
+            select: {
+              id: true,
+              status: true,
+              bagCount: true,
+              createdAt: true
+            }
+          } : undefined
+        },
+        orderBy: [
+          { priority: 'asc' },
+          { createdAt: 'desc' }
+        ],
+        skip,
+        take: limitNum
+      }),
+      prisma.service.count({ where })
+    ]);
+    
+    res.json({
+      success: true,
+      count: services.length,
+      total,
+      data: services,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(total / limitNum),
+        type
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error obteniendo servicios por tipo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+};
+
+// Get services ready for delivery
+exports.getReadyForDelivery = async (req, res) => {
+  try {
+    const { zone, repartidorId } = req.query;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+    
+    // Construir filtros
+    const where = {
+      serviceType: 'DELIVERY',
+      status: {
+        in: ['READY_FOR_DELIVERY', 'ASSIGNED_TO_ROUTE', 'OUT_FOR_DELIVERY']
+      }
+    };
+    
+    // Filtros según el rol
+    if (userRole === 'REPARTIDOR') {
+      // Para repartidores: servicios asignados a él O sin asignar en su zona
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { zone: true }
+      });
+      
+      where.OR = [
+        { repartidorId: userId },
+        { 
+          repartidorId: null,
+          hotel: { zone: user.zone }
+        }
+      ];
+    } else if (userRole === 'ADMIN') {
+      // 🆕 ADMIN puede ver todos los servicios de entrega, sin filtro por zona
+      // No agregar filtros adicionales para admin
+    } else if (repartidorId) {
+      where.repartidorId = repartidorId;
+    }
+    
+    // Solo aplicar filtro de zona si NO es admin y se especifica zona
+    if (zone && userRole !== 'ADMIN') {
+      where.hotel = { zone: zone };
+    }
+    
+    // Obtener servicios
+    const services = await prisma.service.findMany({
+      where,
+      include: {
+        hotel: {
+          select: {
+            id: true,
+            name: true,
+            zone: true,
+            address: true,
+            latitude: true,
+            longitude: true
+          }
+        },
+        repartidor: {
+          select: {
+            id: true,
+            name: true,
+            zone: true
+          }
+        },
+        originalService: {
+          select: {
+            id: true,
+            guestName: true,
+            pickupDate: true,
+            processStartDate: true,
+            deliveryDate: true
+          }
+        }
+      },
+      orderBy: [
+        { status: 'asc' }, // READY_FOR_DELIVERY primero
+        { createdAt: 'asc' } // Más antiguos primero
+      ]
+    });
+    
+    res.json({
+      success: true,
+      count: services.length,
+      data: services,
+      message: 'Servicios listos para entrega obtenidos exitosamente'
+    });
+    
+  } catch (error) {
+    console.error('Error obteniendo servicios listos para entrega:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+};
+
+// Update delivery service status
+exports.updateDeliveryStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, deliveryData } = req.body;
+    const userId = req.user.id;
+    
+    // Validar servicio de entrega
+    const service = await prisma.service.findUnique({
+      where: { id },
+      include: {
+        hotel: true,
+        originalService: true
+      }
+    });
+    
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: 'Servicio de entrega no encontrado'
+      });
+    }
+    
+    if (service.serviceType !== 'DELIVERY') {
+      return res.status(400).json({
+        success: false,
+        message: 'Este endpoint es solo para servicios de entrega'
+      });
+    }
+    
+    // Preparar datos de actualización
+    const updateData = {
+      status,
+      updatedAt: createLimaTimestamp()
+    };
+    
+    // Agregar campos específicos según el estado
+    switch (status) {
+      case 'OUT_FOR_DELIVERY':
+        updateData.pickupDate = createLimaTimestamp(); // Fecha de inicio de entrega
+        if (deliveryData?.repartidorId) {
+          updateData.repartidorId = deliveryData.repartidorId;
+        }
+        break;
+        
+      case 'DELIVERED':
+        updateData.deliveryDate = createLimaTimestamp();
+        if (deliveryData?.deliveryPhotos) {
+          updateData.deliveryPhotos = deliveryData.deliveryPhotos;
+        }
+        if (deliveryData?.signature) {
+          updateData.signature = deliveryData.signature;
+        }
+        if (deliveryData?.observations) {
+          updateData.observations = deliveryData.observations;
+        }
+        break;
+    }
+    
+    // Actualizar en transacción
+    const updatedService = await prisma.$transaction(async (tx) => {
+      const updated = await tx.service.update({
+        where: { id },
+        data: updateData,
+        include: {
+          hotel: true,
+          repartidor: {
+            select: { id: true, name: true }
+          },
+          originalService: {
+            select: { id: true, guestName: true }
+          }
+        }
+      });
+      
+      // Crear audit log
+      await tx.auditLog.create({
+        data: {
+          action: 'DELIVERY_STATUS_UPDATED',
+          entity: 'service',
+          entityId: id,
+          details: `Estado de entrega actualizado a ${status}`,
+          userId: userId,
+          serviceId: id
+        }
+      });
+      
+      return updated;
+    });
+    
+    res.json({
+      success: true,
+      message: `Estado de entrega actualizado a ${status}`,
+      data: updatedService
+    });
+    
+  } catch (error) {
+    console.error('Error actualizando estado de entrega:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+};

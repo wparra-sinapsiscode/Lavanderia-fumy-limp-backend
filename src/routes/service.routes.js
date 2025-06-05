@@ -71,6 +71,23 @@ router.get(
   serviceController.getServiceStats
 );
 
+// 🆕 RUTAS ESPECÍFICAS DEBEN IR ANTES DE /:id
+
+// Get services by type (PICKUP or DELIVERY)
+router.get(
+  '/type/:type',
+  authMiddleware.verifyToken,
+  serviceController.getServicesByType
+);
+
+// Get services ready for delivery
+router.get(
+  '/ready-for-delivery',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN', 'REPARTIDOR']),
+  serviceController.getReadyForDelivery
+);
+
 // Get service by ID - IMPORTANTE: Esta ruta debe ir DESPUÉS de las rutas específicas
 router.get(
   '/:id',
@@ -154,6 +171,24 @@ router.post(
   '/:id/labels',
   authMiddleware.verifyToken,
   serviceController.createServiceLabels
+);
+
+// 🆕 RUTAS PARA SERVICIOS DE ENTREGA
+
+// Create delivery service from original service
+router.post(
+  '/:originalServiceId/create-delivery',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['ADMIN', 'RECEPCION']),
+  serviceController.createDeliveryService
+);
+
+// Update delivery service status
+router.put(
+  '/:id/delivery-status',
+  authMiddleware.verifyToken,
+  authMiddleware.hasRole(['REPARTIDOR', 'ADMIN']),
+  serviceController.updateDeliveryStatus
 );
 
 // Delete service
