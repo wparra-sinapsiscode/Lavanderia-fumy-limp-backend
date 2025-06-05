@@ -55,7 +55,7 @@ function isPickupService(service) {
  * @returns {boolean} True if it's a delivery service
  */
 function isDeliveryService(service) {
-  return ['IN_PROCESS', 'PARTIAL_DELIVERY', 'COMPLETED', 'ESPERANDO', 'READY_FOR_DELIVERY'].includes(service.status);
+  return service.status === 'READY_FOR_DELIVERY';
 }
 
 /**
@@ -1698,7 +1698,7 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
   // SOLO servicios SIN deliveryRepartidorId asignado (fondo amarillo)
   if (type === 'delivery' || type === 'mixed') {
     whereService.OR.push({
-      status: { in: ['IN_PROCESS', 'READY_FOR_DELIVERY', 'ESPERANDO'] }, // 🚀 NUEVO: Incluir ESPERANDO para entregas
+      status: 'READY_FOR_DELIVERY', // 🚀 Solo servicios listos para entrega
       deliveryRepartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
       estimatedDeliveryDate: {
         gte: getLimaDateRange(date).start,
@@ -2024,7 +2024,7 @@ exports.generateAutomaticRoutes = async (req, res) => {
     // SOLO servicios SIN deliveryRepartidorId asignado (fondo amarillo)
     if (type === 'delivery' || type === 'mixed') {
       const deliveryCondition = {
-        status: 'IN_PROCESS',
+        status: 'READY_FOR_DELIVERY',
         deliveryRepartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
         estimatedDeliveryDate: {
           gte: getLimaDateRange(date).start,
