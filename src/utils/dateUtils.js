@@ -14,6 +14,15 @@ function getCurrentDateTimeLima() {
 }
 
 /**
+ * Crea una fecha para almacenar en BD que represente el momento actual en Lima
+ * @returns {Date} Fecha para almacenar en BD
+ */
+function createLimaTimestamp() {
+  // Para mantener consistencia con UTC pero representando tiempo de Lima
+  return new Date();
+}
+
+/**
  * Convierte una fecha UTC a Lima
  * @param {Date|string} utcDate - Fecha en UTC
  * @returns {Date|null} Fecha convertida a Lima
@@ -132,6 +141,7 @@ function addDays(date, days) {
 
 module.exports = {
   getCurrentDateTimeLima,
+  createLimaTimestamp,
   utcToLima,
   formatDateLima,
   formatDateOnly,

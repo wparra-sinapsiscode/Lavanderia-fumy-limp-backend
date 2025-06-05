@@ -7,6 +7,24 @@
 const { prisma } = require('../config/database');
 
 /**
+ * Helper function to get Lima timezone date range
+ * @param {string} dateString - Date in YYYY-MM-DD format
+ * @returns {Object} - Start and end dates for Lima timezone
+ */
+function getLimaDateRange(dateString) {
+  // Crear el inicio del día en UTC para la fecha dada
+  const startOfDay = new Date(dateString + 'T00:00:00.000Z');
+  
+  // Crear el final del día en UTC
+  const endOfDay = new Date(dateString + 'T23:59:59.999Z');
+  
+  return {
+    start: startOfDay,
+    end: endOfDay
+  };
+}
+
+/**
  * Helper function to normalize date for database storage
  * Ensures consistent UTC date handling across all route operations
  * @param {string} dateString - Date string in YYYY-MM-DD format
@@ -1527,8 +1545,8 @@ exports.generateRecommendedRoute = async (req, res) => {
           where: {
             status: 'PENDING_PICKUP',
             estimatedPickupDate: {
-              gte: new Date(routeDate + 'T00:00:00.000Z'),
-              lt: new Date(routeDate + 'T24:00:00.000Z')
+              gte: getLimaDateRange(routeDate).start,
+              lt: getLimaDateRange(routeDate).end
             }
           },
           include: {
@@ -1670,8 +1688,8 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
       status: 'PENDING_PICKUP',
       repartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
       estimatedPickupDate: {
-        gte: new Date(date + 'T00:00:00.000Z'),
-        lt: new Date(date + 'T24:00:00.000Z')
+        gte: getLimaDateRange(date).start,
+        lt: getLimaDateRange(date).end
       }
     });
   }
@@ -1683,8 +1701,8 @@ async function generateRouteForRepartidor(repartidorId, date, zone, type = 'mixe
       status: 'IN_PROCESS',
       deliveryRepartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
       estimatedDeliveryDate: {
-        gte: new Date(date + 'T00:00:00.000Z'),
-        lt: new Date(date + 'T24:00:00.000Z')
+        gte: getLimaDateRange(date).start,
+        lt: getLimaDateRange(date).end
       }
     });
   }
@@ -1999,6 +2017,16 @@ exports.generateAutomaticRoutes = async (req, res) => {
     console.log('🚀 INICIANDO GENERACIÓN DE RUTAS AUTOMÁTICAS');
     console.log('📅 Parámetros recibidos:', { date, zones, type });
     
+    // 🔍 DEBUG: Agregar logging detallado de fechas
+    if (date) {
+      const range = getLimaDateRange(date);
+      console.log('🕐 DEBUG FECHAS:');
+      console.log('  Fecha recibida:', date);
+      console.log('  Rango calculado Start:', range.start.toISOString());
+      console.log('  Rango calculado End:', range.end.toISOString());
+      console.log('  Hora actual UTC:', new Date().toISOString());
+    }
+    
     // Validar fecha
     if (!date) {
       console.log('❌ Error: Fecha no proporcionada');
@@ -2037,8 +2065,8 @@ exports.generateAutomaticRoutes = async (req, res) => {
         status: 'PENDING_PICKUP',
         repartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
         estimatedPickupDate: {
-          gte: new Date(date + 'T00:00:00.000Z'),
-          lt: new Date(date + 'T24:00:00.000Z')
+          gte: getLimaDateRange(date).start,
+          lt: getLimaDateRange(date).end
         }
       };
       whereService.OR.push(pickupCondition);
@@ -2052,8 +2080,8 @@ exports.generateAutomaticRoutes = async (req, res) => {
         status: 'IN_PROCESS',
         deliveryRepartidorId: null, // ✅ CRÍTICO: Solo servicios sin asignar
         estimatedDeliveryDate: {
-          gte: new Date(date + 'T00:00:00.000Z'),
-          lt: new Date(date + 'T24:00:00.000Z')
+          gte: getLimaDateRange(date).start,
+          lt: getLimaDateRange(date).end
         }
       };
       whereService.OR.push(deliveryCondition);
@@ -2085,7 +2113,31 @@ exports.generateAutomaticRoutes = async (req, res) => {
 
     console.log(`📈 SERVICIOS ENCONTRADOS: ${services.length}`);
     
-    // Log detallado de servicios encontrados
+    // 🔍 DEBUG: Verificar todos los servicios en BD (sin filtro de fecha)
+    const allServices = await prisma.service.findMany({
+      where: {
+        status: 'PENDING_PICKUP',
+        repartidorId: null
+      },
+      select: {
+        id: true,
+        guestName: true,
+        status: true,
+        estimatedPickupDate: true,
+        repartidorId: true,
+        hotel: {
+          select: { name: true, zone: true }
+        }
+      }
+    });
+    
+    console.log('🔍 DEBUG - TODOS LOS SERVICIOS PENDING_PICKUP SIN REPARTIDOR:');
+    allServices.forEach((service, index) => {
+      console.log(`  ${index + 1}. ${service.guestName} - ${service.hotel.name} (${service.hotel.zone}) - EstimatedPickup: ${service.estimatedPickupDate.toISOString()}`);
+    });
+    
+    // Log detallado de servicios encontrados (con filtro)
+    console.log('\\n📊 SERVICIOS FILTRADOS POR FECHA:');
     services.forEach((service, index) => {
       console.log(`  ${index + 1}. ${service.hotel.name} (${service.hotel.zone}) - ${service.guestName} - Status: ${service.status} - RepartidorId: ${service.repartidorId} - DeliveryRepartidorId: ${service.deliveryRepartidorId}`);
     });

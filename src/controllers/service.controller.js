@@ -2,6 +2,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const path = require('path');
 const { AUDIT_ACTIONS } = require('../config/constants');
+const { createLimaTimestamp } = require('../utils/dateUtils');
 
 // Create a new service
 exports.createService = async (req, res) => {
@@ -57,8 +58,19 @@ exports.createService = async (req, res) => {
     }
     
     // Calculate estimated pickup date (2 hours from now)
-    const estimatedPickupDate = new Date();
+    const now = createLimaTimestamp();
+    const estimatedPickupDate = new Date(now);
+    
+    // IMPORTANTE: Mantener la fecha en el mismo día
+    // Si agregar 2 horas pasa al día siguiente, usar las 22:00 del día actual
     estimatedPickupDate.setHours(estimatedPickupDate.getHours() + 2);
+    
+    // Verificar si cambió de día
+    if (estimatedPickupDate.getDate() !== now.getDate()) {
+      // Resetear al día actual a las 22:00
+      estimatedPickupDate.setTime(now.getTime());
+      estimatedPickupDate.setHours(22, 0, 0, 0);
+    }
     
     // Create service
     const service = await prisma.service.create({
@@ -175,8 +187,19 @@ exports.createHotelService = async (req, res) => {
     const guestName = hotel.contactPerson || 'Servicio de Hotel';
     
     // Calculate estimated pickup date (2 hours from now)
-    const estimatedPickupDate = new Date();
+    const now = createLimaTimestamp();
+    const estimatedPickupDate = new Date(now);
+    
+    // IMPORTANTE: Mantener la fecha en el mismo día
+    // Si agregar 2 horas pasa al día siguiente, usar las 22:00 del día actual
     estimatedPickupDate.setHours(estimatedPickupDate.getHours() + 2);
+    
+    // Verificar si cambió de día
+    if (estimatedPickupDate.getDate() !== now.getDate()) {
+      // Resetear al día actual a las 22:00
+      estimatedPickupDate.setTime(now.getTime());
+      estimatedPickupDate.setHours(22, 0, 0, 0);
+    }
     
     // Create service
     const service = await prisma.service.create({
@@ -580,16 +603,16 @@ exports.updateServiceStatus = async (req, res) => {
     // Add timestamps based on status (only for fields that exist)
     switch (status) {
       case 'PICKED_UP':
-        updateData.pickupDate = new Date();
+        updateData.pickupDate = createLimaTimestamp();
         break;
       case 'LABELED':
-        updateData.labeledDate = new Date();
+        updateData.labeledDate = createLimaTimestamp();
         break;
       case 'IN_PROCESS':
-        updateData.processStartDate = new Date();
+        updateData.processStartDate = createLimaTimestamp();
         break;
       case 'COMPLETED':
-        updateData.deliveryDate = new Date();
+        updateData.deliveryDate = createLimaTimestamp();
         break;
       case 'ASSIGNED_TO_ROUTE':
         // Just update the status, no special timestamp needed
@@ -819,11 +842,11 @@ exports.registerPickup = async (req, res) => {
           existingService.observations,
         collectorName,
         geolocation,
-        pickupDate: new Date(),
+        pickupDate: createLimaTimestamp(),
         price: price ? parseFloat(price) : null,
         repartidorId: req.user.id,
         status: 'PICKED_UP',
-        internalNotes: `${existingService.internalNotes || ''}\n[${new Date().toLocaleString()}] Recogido por ${req.user.name}`.trim()
+        internalNotes: `${existingService.internalNotes || ''}\n[${createLimaTimestamp().toLocaleString()}] Recogido por ${req.user.name}`.trim()
       },
       include: {
         hotel: true,
@@ -839,7 +862,7 @@ exports.registerPickup = async (req, res) => {
           amount: parseFloat(price),
           incomeCategory: 'SERVICIO_LAVANDERIA',
           description: `Servicio de lavandería - ${existingService.guestName} (${existingService.hotel.name})`,
-          date: new Date(),
+          date: createLimaTimestamp(),
           paymentMethod: 'EFECTIVO',
           hotelId: existingService.hotelId,
           serviceId: id,
@@ -1756,7 +1779,7 @@ exports.createServiceLabels = async (req, res) => {
           where: { id },
           data: {
             status: 'LABELED',
-            labeledDate: new Date()
+            labeledDate: createLimaTimestamp()
           }
         });
       }
